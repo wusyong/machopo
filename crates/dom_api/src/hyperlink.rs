@@ -400,12 +400,24 @@ pub(crate) fn follow_hyperlink<H: ScriptHost>(
             }
         });
         let chosen = chosen_document(cx, document, &target);
+        // A target no frame has opens a new window, which a sandbox may
+        // forbid, the console told even of a script's click (Blink's
+        // `CreateNewWindow` checks it first); the user's keys' new tab it
+        // doesn't (Blink's `FrameTree::FindOrCreateFrameForNavigation`
+        // drops a script's keys alone, `by_keys`'s untrusted ones).
+        if by_keys.is_none()
+            && chosen.is_none()
+            && !crate::frame::may_open_window(cx, document, url.as_str())
+        {
+            return;
+        }
         match (by_keys, chosen) {
             (Some(background), _) => cx.request_navigation(
                 document,
                 FrameNavigation::NewTab {
                     url: url.into(),
                     background,
+                    new_window: false,
                 },
             ),
             (None, Some(chosen)) => {
@@ -418,6 +430,7 @@ pub(crate) fn follow_hyperlink<H: ScriptHost>(
                 FrameNavigation::NewTab {
                     url: url.into(),
                     background: false,
+                    new_window: true,
                 },
             ),
             (None, None) => {}

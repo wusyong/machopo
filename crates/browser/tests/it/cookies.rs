@@ -302,6 +302,7 @@ fn a_new_tabs_navigation_is_the_pages_that_opened_it() {
         initiator: opener.devtools_frame_token(),
         url: server.url_for_host("b.localhost", "/check"),
         disposition: WindowOpenDisposition::NewForegroundTab,
+        new_window: true,
     });
     let [opened] = <[_; 1]>::try_from(opener.take_opened()).expect("one new tab");
     let (mut tab, tab_rx) = tab_in(partition);
@@ -338,6 +339,7 @@ fn a_new_tabs_about_blank_is_of_the_page_that_opened_it() {
         initiator: opener.devtools_frame_token(),
         url: "about:blank".into(),
         disposition: WindowOpenDisposition::NewForegroundTab,
+        new_window: true,
     });
     let [opened] = <[_; 1]>::try_from(opener.take_opened()).expect("one new tab");
     let (mut tab, tab_rx) = tab_in(partition);

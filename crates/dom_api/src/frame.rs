@@ -723,6 +723,118 @@ pub fn scripting_disabled<'gc>(cx: &dom::Cx<'_, 'gc>, document: dom::NodeRef<'gc
         || document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::SCRIPTS)
 }
 
+/// The console's message of a script `document` is sandboxed out of
+/// running (Blink's `CanExecuteScripts` as it is about to run one): of no
+/// line, at its URL.
+pub fn note_blocked_script<'gc>(cx: &dom::Cx<'_, 'gc>, document: dom::NodeRef<'gc>) {
+    if !document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::SCRIPTS) {
+        return;
+    }
+    let url = cx
+        .document_url(document)
+        .map(|url| url.to_string())
+        .unwrap_or_default();
+    cx.add_console_note(dom::ConsoleNote {
+        source: dom::ConsoleSource::Security,
+        level: dom::ConsoleLevel::Error,
+        text: format!(
+            "Blocked script execution in '{url}' because the document's frame is sandboxed and the 'allow-scripts' permission is not set."
+        ),
+        url,
+        line: None,
+    });
+}
+
+/// Whether `document` may open a new window, as its sandbox has it (Blink's
+/// `CreateNewWindow`): not sandboxed without `allow-popups`, which the
+/// console is told of, at the script asking, `url` the one to open.
+pub fn may_open_window<'gc>(cx: &dom::Cx<'_, 'gc>, document: dom::NodeRef<'gc>, url: &str) -> bool {
+    if !document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::POPUPS) {
+        return true;
+    }
+    cx.add_console_note_at_script(dom::ConsoleNote {
+        source: dom::ConsoleSource::Security,
+        level: dom::ConsoleLevel::Error,
+        text: format!(
+            "Blocked opening '{url}' in a new window because the request was made in a sandboxed frame whose 'allow-popups' permission is not set."
+        ),
+        url: cx
+            .document_url(document)
+            .map(|url| url.to_string())
+            .unwrap_or_default(),
+        line: None,
+    });
+    false
+}
+
+/// Whether `source`'s frame may navigate `target`'s, as `source`'s sandbox
+/// has it (Blink's `LocalFrame::CanNavigate`, HTML's "allowed to
+/// navigate"): its own, any below it, and the top-level one with
+/// `allow-top-navigation` (or `-by-user-activation` and the user's
+/// activation); not another, its ancestors and siblings. What it may not
+/// the console is told of, at the script asking.
+pub(crate) fn sandbox_allows_navigation<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    source: dom::NodeRef<'gc>,
+    target: dom::NodeRef<'gc>,
+) -> bool {
+    use protocol::sandbox::SandboxFlags;
+    let flags = document_sandbox(cx, source);
+    if elise::Gc::ptr_eq(source, target) || !flags.contains(SandboxFlags::NAVIGATION) {
+        return true;
+    }
+    // Below it: its own frame on the way up from the target's.
+    let mut at = target;
+    let mut below = false;
+    // A frame tree is fewer than u16::MAX deep.
+    for _ in 0..u16::MAX {
+        let Some(owner) = cx.frame_owner(at) else {
+            break;
+        };
+        at = cx.document_of(owner);
+        if elise::Gc::ptr_eq(at, source) {
+            below = true;
+            break;
+        }
+    }
+    if below {
+        return true;
+    }
+    let top = cx.frame_owner(target).is_none();
+    let reason = if !top {
+        "The frame attempting navigation is sandboxed, and is therefore disallowed from navigating its ancestors."
+    } else if flags.contains(SandboxFlags::TOP_NAVIGATION)
+        && flags.contains(SandboxFlags::TOP_NAVIGATION_BY_USER_ACTIVATION)
+    {
+        "The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set."
+    } else if flags.contains(SandboxFlags::TOP_NAVIGATION)
+        && !cx
+            .window_of(source)
+            .is_some_and(|window| cx.has_transient_activation(window))
+    {
+        "The frame attempting navigation of the top-level window is sandboxed with the 'allow-top-navigation-by-user-activation' flag, but has no user activation (aka gesture). See https://www.chromestatus.com/feature/5629582019395584."
+    } else {
+        return true;
+    };
+    let source_url = cx
+        .document_url(source)
+        .map(|url| url.to_string())
+        .unwrap_or_default();
+    let target_origin = cx
+        .document_origin(target)
+        .map_or_else(|| "null".to_owned(), |origin| origin.ascii_serialization());
+    cx.add_console_note_at_script(dom::ConsoleNote {
+        source: dom::ConsoleSource::JavaScript,
+        level: dom::ConsoleLevel::Error,
+        text: format!(
+            "Unsafe attempt to initiate navigation for frame with origin '{target_origin}' from frame with URL '{source_url}'. {reason}\n"
+        ),
+        url: source_url,
+        line: None,
+    });
+    false
+}
+
 /// `document` is sandboxed by `flags`, as its host committed it: the DOM
 /// keeps them, its origin a new opaque one with the origin flag, scripting
 /// disabled for it with the scripts flag.

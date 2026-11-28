@@ -1823,3 +1823,289 @@ fn the_navigations_sent_are_booked_on_their_frames() {
         Some(3)
     );
 }
+
+/// A script run in `frame`'s realm, at `https://example.test/a/script.js`.
+fn run_in(engine: &mut dom_js::V8Engine, frame: dom_api::FrameId, source: &str) {
+    engine.run_classic_script(
+        frame,
+        &ClassicScript {
+            source,
+            url: "https://example.test/a/script.js",
+            base_url: None,
+            line: 1,
+            muted: false,
+            use_credentials: false,
+        },
+    );
+}
+
+/// Two frames in the top-level one, the first's document sandboxed by
+/// `tokens` with a frame in it: the engine, the first frame and its
+/// document.
+fn sandboxed_frame(tokens: &str) -> (crate::TestEngine, dom_api::FrameId, dom::NodeRoot) {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));
+         var g = document.body.appendChild(document.createElement('iframe'));",
+    );
+    let made = created(&mut engine, &[]);
+    let [(f, _), (g, _)] = made[..] else {
+        panic!("{made:?}");
+    };
+    let document = engine
+        .create_sandboxed_window(
+            f,
+            "https://example.test/a/child.html",
+            Instant::now(),
+            protocol::sandbox::parse(tokens).flags,
+        )
+        .expect("its frame");
+    engine
+        .create_window(g, "https://example.test/a/sibling.html", Instant::now())
+        .expect("its frame");
+    run_in(
+        &mut engine,
+        f,
+        "document.appendChild(document.createElement('iframe'));",
+    );
+    assert_eq!(created(&mut engine, &[f, g]).len(), 1, "the frame in it");
+    (engine, f, document)
+}
+
+/// The texts of the console's messages, each with its source, URL and
+/// line.
+fn notes(engine: &mut dom_js::V8Engine) -> Vec<String> {
+    engine
+        .dom_mut()
+        .take_console_notes()
+        .into_iter()
+        .map(|note| {
+            format!(
+                "{:?} {:?} {} {:?}: {}",
+                note.source, note.level, note.url, note.line, note.text
+            )
+        })
+        .collect()
+}
+
+/// Each `Location` the frame's script navigates, from its own frame's
+/// down: `ok` or the exception's name.
+const NAVIGATES: &str = "for (const [name, w] of [['self', window], ['child', frames[0]], \
+     ['sibling', parent.frames[1]], ['top', parent]]) { \
+     try { w.location.href = '/' + name; parent.log.push(name + ' ok'); } \
+     catch (e) { parent.log.push(name + ' ' + e.name); } }";
+
+/// The console's message of a navigation of `target` the frame may not
+/// make, `reason` why: at the script, its document's URL in the text.
+fn unsafe_navigation(target: &str, reason: &str) -> String {
+    format!(
+        "JavaScript Error https://example.test/a/script.js Some(0): Unsafe attempt to initiate navigation for frame with origin '{target}' from frame with URL 'https://example.test/a/child.html'. {reason}\n"
+    )
+}
+
+const ANCESTORS: &str = "The frame attempting navigation is sandboxed, and is therefore disallowed from navigating its ancestors.";
+const TOP: &str = "The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set.";
+const NO_ACTIVATION: &str = "The frame attempting navigation of the top-level window is sandboxed with the 'allow-top-navigation-by-user-activation' flag, but has no user activation (aka gesture). See https://www.chromestatus.com/feature/5629582019395584.";
+
+/// A sandboxed frame's script navigates its own frame and those below it,
+/// not a sibling's nor the top-level one but with `allow-top-navigation`
+/// (or `-by-user-activation` and the user's activation): a `Location`
+/// throws a `SecurityError`, the console told why, at the script (Chrome's
+/// messages, as it was measured). One not sandboxed navigates any.
+#[test]
+fn a_sandboxed_frame_navigates_its_own_and_those_below_it() {
+    let origin = "https://example.test";
+    for (tokens, expected, told) in [
+        (
+            "allow-scripts allow-same-origin",
+            "self ok / child ok / sibling SecurityError / top SecurityError",
+            vec![
+                unsafe_navigation(origin, ANCESTORS),
+                unsafe_navigation(origin, TOP),
+            ],
+        ),
+        (
+            "allow-scripts allow-same-origin allow-top-navigation",
+            "self ok / child ok / sibling SecurityError / top ok",
+            vec![unsafe_navigation(origin, ANCESTORS)],
+        ),
+        (
+            "allow-scripts allow-same-origin allow-top-navigation-by-user-activation",
+            "self ok / child ok / sibling SecurityError / top SecurityError",
+            vec![
+                unsafe_navigation(origin, ANCESTORS),
+                unsafe_navigation(origin, NO_ACTIVATION),
+            ],
+        ),
+    ] {
+        let (mut engine, f, _) = sandboxed_frame(tokens);
+        notes(&mut engine);
+        run_in(&mut engine, f, NAVIGATES);
+        assert_eq!(log(&mut engine), expected, "{tokens}");
+        assert_eq!(notes(&mut engine), told, "{tokens}");
+    }
+    // The frame of an opaque origin: the top-level one's origin told.
+    let (mut engine, f, _) = sandboxed_frame("allow-scripts");
+    notes(&mut engine);
+    run_in(
+        &mut engine,
+        f,
+        "try { parent.location.href = '/top'; } catch (e) { parent.postMessage(e.name, '*'); }",
+    );
+    let [note] = &notes(&mut engine)[..] else {
+        panic!("one message");
+    };
+    assert!(
+        note.contains("for frame with origin 'https://example.test' from frame with URL 'https://example.test/a/child.html'"),
+        "{note}"
+    );
+    // Not sandboxed: every one.
+    let mut engine = self::engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));
+         var g = document.body.appendChild(document.createElement('iframe'));",
+    );
+    let made = created(&mut engine, &[]);
+    let [(f, _), (g, _)] = made[..] else {
+        panic!("{made:?}");
+    };
+    for (frame, url) in [(f, "child"), (g, "sibling")] {
+        engine
+            .create_window(
+                frame,
+                &format!("https://example.test/a/{url}.html"),
+                Instant::now(),
+            )
+            .expect("its frame");
+    }
+    run_in(
+        &mut engine,
+        f,
+        "document.appendChild(document.createElement('iframe'));",
+    );
+    run_in(&mut engine, f, NAVIGATES);
+    assert_eq!(log(&mut engine), "self ok / child ok / sibling ok / top ok");
+    assert_eq!(notes(&mut engine), Vec::<String>::new());
+}
+
+/// With `allow-top-navigation-by-user-activation`, the frame's window's
+/// transient activation lets it navigate the top-level frame (Blink's
+/// `CanNavigate` asks the frame navigating, not the top-level one).
+#[test]
+fn a_sandboxed_frame_activated_navigates_the_top_level_one() {
+    let (mut engine, f, document) =
+        sandboxed_frame("allow-scripts allow-same-origin allow-top-navigation-by-user-activation");
+    engine.dom_mut().mutate(|cx| {
+        let window = cx.window_of(document.get(cx.gc)).expect("its window");
+        cx.notify_activation(window);
+    });
+    notes(&mut engine);
+    run_in(
+        &mut engine,
+        f,
+        "try { parent.location.href = '/top'; parent.log.push('ok'); } catch (e) { parent.log.push(e.name); }",
+    );
+    assert_eq!(log(&mut engine), "ok");
+    assert_eq!(notes(&mut engine), Vec::<String>::new());
+}
+
+/// A link to a target no frame has, a new window, a frame sandboxed
+/// without `allow-popups` doesn't follow, the console told at the script,
+/// a script's click too; one to its own frame it follows.
+#[test]
+fn a_sandboxed_frame_opens_no_new_window() {
+    // At each click's line, the script's second and fifth.
+    let blocked = |line| {
+        format!(
+            "Security Error https://example.test/a/script.js Some({line}): Blocked opening \
+             'https://example.test/a/new' in a new window because the request was made in a \
+             sandboxed frame whose 'allow-popups' permission is not set."
+        )
+    };
+    for (tokens, told) in [
+        (
+            "allow-scripts allow-same-origin",
+            vec![blocked(1), blocked(4)],
+        ),
+        ("allow-scripts allow-same-origin allow-popups", vec![]),
+    ] {
+        let (mut engine, f, _) = sandboxed_frame(tokens);
+        notes(&mut engine);
+        run_in(
+            &mut engine,
+            f,
+            "var a = document.documentElement.appendChild(document.createElement('a'));
+             a.href = '/a/new'; a.target = '_blank'; a.click();
+             var own = document.documentElement.appendChild(document.createElement('a'));
+             own.href = '/a/own'; own.click();
+             a.click();",
+        );
+        assert_eq!(notes(&mut engine), told, "{tokens}");
+    }
+}
+
+/// A script a document sandboxed without `allow-scripts` is to run, an
+/// element's, an event handler's or a `javascript:` URL's, the console is
+/// told of, at the
+/// document's URL, of no line (Blink's `CanExecuteScripts` as it is about
+/// to run one); scripting disabled in a document not sandboxed (an
+/// inert one's) it isn't.
+#[test]
+fn a_blocked_script_is_told() {
+    let blocked = "Security Error https://example.test/a/child.html None: Blocked script execution in \
+                   'https://example.test/a/child.html' because the document's frame is sandboxed and \
+                   the 'allow-scripts' permission is not set.";
+    let (mut engine, _, _) = sandboxed_frame("allow-same-origin");
+    notes(&mut engine);
+    run(
+        &mut engine,
+        "var d = f.contentDocument, root = d.documentElement;
+         var script = d.createElement('script');
+         script.textContent = 'parent.ran = true';
+         root.appendChild(script);
+         root.setAttribute('onclick', 'parent.ran = true');
+         root.dispatchEvent(new Event('click'));
+         f.contentWindow.location.href = 'javascript:parent.ran = true';",
+    );
+    // The `javascript:` URL's task.
+    while engine.run_due_tasks() {}
+    run(&mut engine, "log.push(String(window.ran));");
+    assert_eq!(log(&mut engine), "undefined");
+    assert_eq!(notes(&mut engine), [blocked, blocked, blocked]);
+    // A document of no window's has scripting disabled, of no sandbox.
+    run(
+        &mut engine,
+        "var inert = document.implementation.createHTMLDocument('');
+         inert.body.setAttribute('onclick', 'parent.ran = true');
+         inert.body.dispatchEvent(new Event('click'));
+         inert.body.appendChild(inert.createElement('script')).textContent = 'ran = true';",
+    );
+    assert_eq!(notes(&mut engine), Vec::<String>::new());
+}
+
+/// A `Location`'s navigation is asked for by the incumbent realm (HTML's
+/// Location-object navigate, Blink's `Location::SetLocation`): the
+/// top-level document's function a sandboxed frame calls navigates the
+/// top-level frame (`href`, `assign`, `replace`), the frame itself
+/// (the entry realm, its URL resolved against) may not.
+#[test]
+fn a_location_is_navigated_by_the_incumbent_realm() {
+    let (mut engine, f, _) = sandboxed_frame("allow-scripts allow-same-origin");
+    run(
+        &mut engine,
+        "function go(how) { try { how(); log.push('ok'); } catch (e) { log.push(e.name); } }",
+    );
+    notes(&mut engine);
+    run_in(
+        &mut engine,
+        f,
+        "parent.go(() => parent.location.href = 'x');
+         parent.go(parent.Function('location.assign(\"y\")'));
+         parent.go(parent.Function('location.replace(\"z\")'));
+         try { parent.location.replace('w'); } catch (e) { parent.log.push(e.name); }",
+    );
+    assert_eq!(log(&mut engine), "SecurityError / ok / ok / SecurityError");
+    assert_eq!(notes(&mut engine).len(), 2);
+}

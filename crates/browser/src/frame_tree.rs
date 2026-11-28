@@ -411,10 +411,26 @@ impl FrameTree {
 
     /// What `frame`'s document is sandboxed by, as it last committed; none
     /// for a frame the tree doesn't have.
-    pub(crate) fn sandbox(&self, frame: FrameToken) -> SandboxFlags {
+    pub fn sandbox(&self, frame: FrameToken) -> SandboxFlags {
         self.nodes
             .get(&frame)
             .map_or(SandboxFlags::NONE, |node| node.sandbox)
+    }
+
+    /// Whether `frame` is `ancestor` or below it.
+    pub(crate) fn is_within(&self, frame: FrameToken, ancestor: FrameToken) -> bool {
+        std::iter::successors(Some(frame), |at| self.nodes.get(at)?.parent).any(|at| at == ancestor)
+    }
+
+    /// What the main frame's next documents are sandboxed by: a new tab's,
+    /// its opener's flags (Chromium's `CreateNewWindow` gives the new main
+    /// frame's pending frame policy the opener's), for each of its
+    /// documents from now on.
+    pub(crate) fn set_main_frame_sandbox(&mut self, sandbox: SandboxFlags) {
+        let root = self.root;
+        if let Some(node) = self.nodes.get_mut(&root) {
+            node.pending_sandbox = sandbox;
+        }
     }
 
     /// `frame`'s navigation on its way.

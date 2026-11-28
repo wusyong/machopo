@@ -398,15 +398,14 @@ impl RenderThread {
         }
     }
 
-    /// The warnings the engine's script earned since (Blink's
+    /// The messages the DOM's operations left since (Blink's
     /// `ExecutionContext::AddConsoleMessage`): the page's log has them.
     pub(super) fn log_console_warnings(&mut self) {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        for text in engine.dom_mut().take_console_warnings() {
-            self.log_agent
-                .add(super::log_agent::LogEntry::javascript_warning(text));
+        for note in engine.dom_mut().take_console_notes() {
+            self.log_agent.add(super::log_agent::LogEntry::of_dom(note));
         }
     }
 }

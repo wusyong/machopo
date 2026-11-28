@@ -911,11 +911,12 @@ content-security-policy/frame-ancestors/
 
 # An iframe's `sandbox`: the flags its renderer parses and the browser
 # keeps and commits, the document's origin opaque without
-# `allow-same-origin`, scripting disabled without `allow-scripts`. Their
-# results are Chrome's but where machopo lacks what a test uses:
-# `window.open`, form submission, modals (`alert`), downloads, `<video>`,
-# PDF, `document.domain`, CSP's `sandbox`; and, for now, what a sandboxed
-# frame may navigate (its ancestors, the top) and its new tabs.
+# `allow-same-origin`, scripting disabled without `allow-scripts`, what a
+# sandboxed frame may navigate (itself and those below it, the top with
+# `allow-top-navigation`, its history) and its new windows. Their results
+# are Chrome's but where machopo lacks what a test uses: `window.open`,
+# form submission, modals (`alert`), downloads and `XMLHttpRequest`,
+# `<video>`, PDF, `document.domain`, CSP's `sandbox`.
 html/browsers/sandboxing/
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_script.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-1.html

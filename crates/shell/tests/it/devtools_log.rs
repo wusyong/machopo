@@ -418,3 +418,86 @@ fn orb_is_not_logged_and_corp_is_with_its_reason() {
         )
     );
 }
+
+/// What a sandbox blocks is in the page's log as Chrome logs it (each
+/// message as it was measured): a script of a document sandboxed without
+/// `allow-scripts` a `security` error at the document's URL, of no line; a
+/// navigation of the top-level frame a `javascript` error, a new window
+/// without `allow-popups` a `security` one, both at the script's line.
+#[test]
+fn what_a_sandbox_blocks_is_logged_as_chrome_logs_it() {
+    let html = "<!DOCTYPE html>\
+                <iframe sandbox srcdoc='<script>0</script>'></iframe>\
+                <iframe sandbox=allow-scripts srcdoc=\"<script>\n\
+                  try { top.location.href = '/away'; } catch (e) {}</script>\"></iframe>\
+                <iframe sandbox=allow-scripts srcdoc=\"<a href=/new target=_blank></a><script>\n\n\
+                  document.querySelector('a').click();</script>\"></iframe>";
+    let server = server(&[("/", Route::ok("text/html", html))]);
+    let origin = server.url("/");
+    let top_origin = origin.trim_end_matches('/');
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Log.enable", json!({}));
+    load(&mut page, &origin);
+    // The frames load side by side: their messages in any order.
+    let mut logged: Vec<Value> = (0..3).map(|_| timeless(next_entry(&mut page))).collect();
+    logged.sort_by_key(|entry| entry["text"].as_str().map(str::to_owned));
+    assert_eq!(
+        logged,
+        [
+            json!({
+                "source": "security",
+                "level": "error",
+                "text": format!("Blocked opening '{origin}new' in a new window because the request was made in a sandboxed frame whose 'allow-popups' permission is not set."),
+                "url": "about:srcdoc",
+                "lineNumber": 2,
+            }),
+            json!({
+                "source": "security",
+                "level": "error",
+                "text": "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.",
+                "url": "about:srcdoc",
+            }),
+            json!({
+                "source": "javascript",
+                "level": "error",
+                "text": format!("Unsafe attempt to initiate navigation for frame with origin '{top_origin}' from frame with URL 'about:srcdoc'. The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set.\n"),
+                "url": "about:srcdoc",
+                "lineNumber": 1,
+            }),
+        ]
+    );
+    // Nothing else.
+    evaluate(&mut page, "0", None);
+    assert_eq!(entries(&mut page), Vec::<Value>::new());
+}
+
+/// The user's click on a link to a new window in a frame sandboxed
+/// without `allow-popups`: the message is at the frame's document's URL,
+/// of no line (no script runs to place it at, as Blink's message with no
+/// script on the stack).
+#[test]
+fn a_new_window_a_click_doesnt_open_is_logged_at_the_document() {
+    let html = "<!DOCTYPE html><style>body { margin: 0 } iframe { display: block; border: 0 }</style>\
+                <iframe sandbox srcdoc=\"<style>body { margin: 0 } a { display: block; height: 50px }</style>\
+                  <a href=/new target=_blank>new</a>\"></iframe>";
+    let server = server(&[("/", Route::ok("text/html", html))]);
+    let origin = server.url("/");
+    let machopo = Machopo::start();
+    let (mut page, _) = page(&machopo);
+    page.call(None, "Log.enable", json!({}));
+    load(&mut page, &origin);
+    for kind in ["mousePressed", "mouseReleased"] {
+        let click = json!({ "type": kind, "x": 10, "y": 10, "button": "left", "clickCount": 1 });
+        page.call(None, "Input.dispatchMouseEvent", click);
+    }
+    assert_eq!(
+        timeless(next_entry(&mut page)),
+        json!({
+            "source": "security",
+            "level": "error",
+            "text": format!("Blocked opening '{origin}new' in a new window because the request was made in a sandboxed frame whose 'allow-popups' permission is not set."),
+            "url": "about:srcdoc",
+        })
+    );
+}

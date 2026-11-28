@@ -104,7 +104,8 @@ pub(crate) fn location<'gc>(
 
 /// A URL a `Location` navigates to: a string, resolved against the entry
 /// realm's document's URL (HTML's entry settings object's; Blink's
-/// `EnteredDOMWindow`): the caller's, not the location's own.
+/// `EnteredDOMWindow`): the caller's, not the location's own; asked for by
+/// the incumbent realm (`OpFront::incumbent_context`).
 pub struct NavigationUrl;
 
 impl ArgType for NavigationUrl {
@@ -114,7 +115,7 @@ impl ArgType for NavigationUrl {
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<F::Str> {
         let url = front.string_arg(index)?;
-        front.prepare_entry_window();
+        front.prepare_entry_and_incumbent_windows();
         Some(url)
     }
 

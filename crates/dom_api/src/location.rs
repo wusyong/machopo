@@ -35,7 +35,9 @@ fn blank() -> Url {
 }
 
 /// HTML's Location-object navigate: the relevant document's frame
-/// navigates to `url`, asked for by `by` (the incumbent realm, if known);
+/// navigates to `url`, asked for by `by` (the incumbent realm, if known:
+/// the realm of the most recent script on the stack, not the entry's the
+/// URL is resolved against);
 /// before the document is completely loaded (as without a user's gesture:
 /// machopo has none) it replaces the current entry.
 fn navigate<'gc>(
@@ -149,7 +151,7 @@ pub(crate) fn set_href<'gc, O: OpFront>(
         return Ok(());
     }
     let url = parse_relative_to_entry(op, cx, this, url)?;
-    let by = op.current_context(cx);
+    let by = op.incumbent_context(cx);
     check_may_navigate(cx, this, &url, by)?;
     navigate(cx, this, url, false, by);
     Ok(())
@@ -166,7 +168,7 @@ pub(crate) fn replace<'gc, O: OpFront>(
         return Ok(());
     }
     let url = parse_relative_to_entry(op, cx, this, url)?;
-    let by = op.current_context(cx);
+    let by = op.incumbent_context(cx);
     check_may_navigate(cx, this, &url, by)?;
     navigate(cx, this, url, true, by);
     Ok(())

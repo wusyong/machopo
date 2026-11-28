@@ -145,8 +145,14 @@ pub enum FrameNavigation {
         pop_state: bool,
     },
     /// A hyperlink followed to `url` in a new tab (the browser's), in the
-    /// background or not.
-    NewTab { url: String, background: bool },
+    /// background or not; a new window the page opens (`new_window`: a
+    /// target no frame has, Blink's `CreateNewWindow`), else one the
+    /// user's keys asked for (Blink's `OpenURL` of a link's new tab).
+    NewTab {
+        url: String,
+        background: bool,
+        new_window: bool,
+    },
     /// `history.go(delta)` (and `back()`, `forward()`): the session
     /// history traverses (the browser's).
     GoToOffset(i32),

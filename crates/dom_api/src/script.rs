@@ -182,6 +182,7 @@ fn prepare_with<'gc>(cx: &Cx<'_, 'gc>, script: NodeRef<'gc>, flags: &mut ScriptF
     // or sandboxed without `allow-scripts`.
     let document = cx.document_of(script);
     if crate::frame::scripting_disabled(cx, document) {
+        crate::frame::note_blocked_script(cx, document);
         return Prepared::Nothing;
     }
     // A browser that runs modules leaves the fallback for those that

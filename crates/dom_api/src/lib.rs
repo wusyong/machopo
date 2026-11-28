@@ -169,8 +169,8 @@ pub use frame::{
     ChildNavigation, FrameId, FrameRequest, FrameToken, NavigationHere, NavigationRequest,
     child_navigation_here, child_windows, document_sandbox, documents_in_tree_order,
     frame_tree_walks_for_testing, iframe_sandbox, named_child_windows, navigate_child_to_fragment,
-    new_frame_token, origin, same_origin, scripting_disabled, set_document_sandbox,
-    update_elements,
+    new_frame_token, note_blocked_script, origin, same_origin, scripting_disabled,
+    set_document_sandbox, update_elements,
 };
 pub use history::{
     can_have_url_rewritten, fragment_target, indicated_element, restore_history,

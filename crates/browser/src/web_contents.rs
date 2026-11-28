@@ -363,6 +363,10 @@ pub struct OpenUrlParams {
     /// from the browser's frame tree: the new tab's navigation is that
     /// page's, for its `SameSite` cookies and an `about:blank`'s origin.
     initiator: CommittedOrigin,
+    /// What the new tab's documents are sandboxed by: its opener's
+    /// document's flags, unless they let its windows escape them
+    /// (`allow-popups-to-escape-sandbox`).
+    sandbox: protocol::sandbox::SandboxFlags,
 }
 
 /// The longest title a tab takes, in characters (Chromium's
@@ -631,6 +635,7 @@ impl WebContents {
     /// asked, its document's origin the initiator. The tab's own renderer
     /// asked for nothing: it goes on if that one goes.
     pub fn navigate_opened(&mut self, params: &OpenUrlParams) {
+        self.frame_tree.set_main_frame_sandbox(params.sandbox);
         self.begin_navigation(
             params.url.clone(),
             NavigationType::NewEntry,
@@ -703,12 +708,17 @@ impl WebContents {
     /// (Chromium's `NavigateToExistingPendingEntry` drops it so). After a
     /// crash, the main frame loads it. False if there is no such entry.
     pub fn go_to_offset(&mut self, offset: isize) -> bool {
-        self.traverse(offset, false)
+        self.traverse(offset, false, None)
     }
 
     /// [`go_to_offset`](Self::go_to_offset), as the page asked if
     /// `renderer_initiated`.
-    fn traverse(&mut self, offset: isize, renderer_initiated: bool) -> bool {
+    fn traverse(
+        &mut self,
+        offset: isize,
+        renderer_initiated: bool,
+        sandboxed: Option<FrameToken>,
+    ) -> bool {
         let Some(index) = self.controller.index_for_offset(offset) else {
             return false;
         };
@@ -724,6 +734,17 @@ impl WebContents {
             self.controller
                 .frames_to_navigate(tree, index, |frame| tree.history_place(frame))
         };
+        if let Some(sandboxed) = sandboxed
+            && loads
+                .iter()
+                .any(|(frame, _)| !self.frame_tree.is_within(*frame, sandboxed))
+        {
+            tracing::warn!(
+                offset,
+                "a sandboxed frame's traversal of frames not below it"
+            );
+            return false;
+        }
         if loads.is_empty() {
             self.controller.go_to_entry_in_place(index);
             self.send_history_offset_and_length();
@@ -942,18 +963,43 @@ impl WebContents {
     /// `RenderFrameHostImpl::OpenURL`: a link the renderer followed to a new
     /// tab, which the embedder opens (`take_opened`), if a page may
     /// navigate a main frame there.
-    fn open_url(&mut self, initiator: FrameToken, url: &str, disposition: WindowOpenDisposition) {
+    fn open_url(
+        &mut self,
+        initiator: FrameToken,
+        url: &str,
+        disposition: WindowOpenDisposition,
+        new_window: bool,
+    ) {
         let Some(origin) = self.frame_tree.committed_origin(initiator) else {
             return self.received_bad_message(BadMessageReason::NavigationByUnknownFrame);
         };
+        use protocol::sandbox::SandboxFlags;
+        // A new window's: its renderer refuses one first (Blink's
+        // `CreateNewWindow`); the browser defends against one that didn't
+        // (Chromium's `RenderFrameHostImpl::CreateNewWindow`). The user's
+        // keys' new tab is of no sandbox (`OpenURL`).
+        let sandbox = if new_window {
+            self.frame_tree.sandbox(initiator)
+        } else {
+            SandboxFlags::NONE
+        };
+        if sandbox.contains(SandboxFlags::POPUPS) {
+            return self.received_bad_message(BadMessageReason::NewTabOfSandboxedFrame);
+        }
         if let Err(why) = self.page_may_navigate_to(url, true, origin.local) {
             tracing::warn!(%url, why, "a page's new tab goes nowhere");
             return;
         }
+        let sandbox = if sandbox.contains(SandboxFlags::PROPAGATES_TO_AUXILIARY_BROWSING_CONTEXTS) {
+            sandbox
+        } else {
+            SandboxFlags::NONE
+        };
         self.opened.push(OpenUrlParams {
             url: url.to_owned(),
             disposition,
             initiator: origin,
+            sandbox,
         });
     }
 
@@ -2306,8 +2352,19 @@ impl WebContents {
                     self.history_load(frame, index, url, Asked::default());
                 }
             }
-            RendererHostMsg::GoToEntryAtOffset(offset) => {
-                self.traverse(*offset as isize, true);
+            RendererHostMsg::GoToEntryAtOffset { frame, offset } => {
+                if !self.frame_tree.contains(*frame) {
+                    return self.received_bad_message(BadMessageReason::NavigationByUnknownFrame);
+                }
+                // A frame sandboxed without `allow-top-navigation`
+                // traverses only where it and the frames below it change
+                // (Chromium's `DoesSandboxNavigationStayWithinSubtree`, of
+                // the top navigation flag).
+                let sandboxed = self
+                    .frame_tree
+                    .sandbox(*frame)
+                    .contains(protocol::sandbox::SandboxFlags::TOP_NAVIGATION);
+                self.traverse(*offset as isize, true, sandboxed.then_some(*frame));
             }
             RendererHostMsg::NavigationCancellationWindowEnded { ids } => {
                 self.cancellation_windows_ended(ids);
@@ -2346,7 +2403,8 @@ impl WebContents {
                 initiator,
                 url,
                 disposition,
-            } => self.open_url(*initiator, url, *disposition),
+                new_window,
+            } => self.open_url(*initiator, url, *disposition, *new_window),
             // The embedder shows it.
             RendererHostMsg::SetCursor(_)
             | RendererHostMsg::TakeFocus { .. }

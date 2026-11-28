@@ -108,7 +108,10 @@ fn a_pages_traversal_goes_with_its_renderer_and_the_browsers_goes_on() {
     let (mut web_contents, host_rx) = tab();
     load(&mut web_contents, &host_rx, &c);
     load(&mut web_contents, &host_rx, &a);
-    web_contents.on_renderer_message(&RendererHostMsg::GoToEntryAtOffset(-1));
+    web_contents.on_renderer_message(&RendererHostMsg::GoToEntryAtOffset {
+        frame: web_contents.devtools_frame_token(),
+        offset: -1,
+    });
     let id = web_contents.latest_navigation_id();
     assert!(web_contents.is_navigating(id));
     web_contents.on_renderer_message(&RendererHostMsg::RendererGone);

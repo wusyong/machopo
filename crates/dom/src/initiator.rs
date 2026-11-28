@@ -106,6 +106,12 @@ impl Dom {
         }
     }
 
+    /// Whether loads asked for wait for the stack of the script that asked
+    /// (`note_request_stacks`).
+    pub fn request_stacks_awaited(&self) -> bool {
+        !self.changes.stacks.asked.borrow().is_empty()
+    }
+
     /// The stack of the script that asked for `asker`'s load, once.
     pub fn take_request_stack(&self, asker: StackAsker) -> Option<Rc<str>> {
         self.changes.stacks.stacks.borrow_mut().remove(&asker)

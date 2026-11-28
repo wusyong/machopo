@@ -1119,6 +1119,14 @@ pub trait Front: DictFront {
         self.prepare_window();
     }
 
+    /// `prepare_entry_window`, and the incumbent realm's window too
+    /// (`OpFront::incumbent_context`): a `Location`'s navigation, its URL
+    /// the entry realm's to resolve, its asker the incumbent's (HTML's
+    /// Location-object navigate; Blink's `Location::SetLocation`).
+    fn prepare_entry_and_incumbent_windows(&mut self) {
+        self.prepare_entry_window();
+    }
+
     /// `prepare_window` with the window of `this`'s relevant realm (the
     /// realm its wrapper was made in), not the member's function's: a
     /// blob read's task (File API's promise in this's relevant realm), so
@@ -1636,6 +1644,17 @@ pub trait OpFront: FrontTypes {
     ) -> Option<Gc<'gc, dom::ExecutionContext>> {
         let _ = cx;
         None
+    }
+
+    /// The execution context of the incumbent realm, if an argument
+    /// prepared it (`Front::prepare_entry_and_incumbent_windows`): the
+    /// realm of the most recent script on the stack. `current_context`'s
+    /// by default.
+    fn incumbent_context<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<Gc<'gc, dom::ExecutionContext>> {
+        self.current_context(cx)
     }
 
     /// The host of the dedicated workers the call's realm makes

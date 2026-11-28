@@ -35,6 +35,10 @@ pub enum BadMessageReason {
     /// Sandbox flags of a frame the tab doesn't have as a child frame
     /// (Chromium's `RFH_SANDBOX_FLAGS`: only a frame's parent sets them).
     FramePolicyOfUnknownFrame,
+    /// A new tab asked for by a frame sandboxed without `allow-popups`
+    /// (Chromium's `RFH_CREATE_NEW_WINDOW_FROM_SANDBOXED_FRAME`: its
+    /// renderer is to refuse it first).
+    NewTabOfSandboxedFrame,
     /// A scroll restoration mode (`UpdateState`) of a frame the tab
     /// doesn't have (Chromium's comes from the frame's own host).
     StateOfUnknownFrame,

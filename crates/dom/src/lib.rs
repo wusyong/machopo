@@ -48,6 +48,8 @@ mod blob;
 mod bloom;
 mod canvas;
 mod collection;
+mod console;
+pub use console::{ConsoleLevel, ConsoleNote, ConsoleSource};
 mod crypto;
 mod cssom;
 mod custom_element;
@@ -922,9 +924,9 @@ struct Changes {
     dom_changes: probe::DomChanges,
     /// The pseudo-classes DevTools forces (`probe`).
     forced: probe::ForcedStates,
-    /// The console warnings script's calls earned, until the host takes
-    /// them (`Dom::take_console_warnings`).
-    console_warnings: Cell<Vec<String>>,
+    /// The messages for the page's console, until the host takes them
+    /// (`console`).
+    console: console::ConsoleNotes,
     /// The next task's number (`tasks`).
     task_sequence: Cell<u64>,
     /// What wakes this DOM's thread for its ports' messages from other
@@ -1098,13 +1100,6 @@ impl Dom {
     /// backup element queue's once an element went in it with its
     /// processing not queued. One read: most calls find none, and write
     /// nothing.
-    /// The warnings for the page's console that script's calls earned
-    /// since the last ask, in order (`Cx::warn_console`): the host logs
-    /// them.
-    pub fn take_console_warnings(&self) -> Vec<String> {
-        self.changes.console_warnings.take()
-    }
-
     #[inline]
     pub fn take_microtasks(&self) -> Microtasks {
         let cell = &self.changes.microtasks;
@@ -1285,16 +1280,6 @@ impl<'gc> Cx<'_, 'gc> {
     pub(crate) fn microtask_to_queue(&self, bit: u8) {
         let cell = &self.changes.microtasks;
         cell.set(cell.get() | bit);
-    }
-
-    /// A warning for the page's console about what script asked (Blink's
-    /// `ExecutionContext::AddConsoleMessage`, a JavaScript one at the
-    /// warning level), for the host to log (`Dom::take_console_warnings`).
-    pub fn warn_console(&self, text: String) {
-        let warnings = &self.changes.console_warnings;
-        let mut taken = warnings.take();
-        taken.push(text);
-        warnings.set(taken);
     }
 
     fn node(&self, kind: NodeKind, owner: Option<NodeRef<'gc>>, site: &Site) -> NodeRef<'gc> {

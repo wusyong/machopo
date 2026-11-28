@@ -49,9 +49,6 @@ pub(crate) fn may_navigate<'gc>(
     url: &Url,
     initiator: dom::NavigationInitiator<'gc>,
 ) -> bool {
-    if url.scheme() != "javascript" {
-        return true;
-    }
     let initiator = match initiator {
         dom::NavigationInitiator::Document(initiator) => Some(initiator),
         // The DOM gives a realm's document by its number.
@@ -59,7 +56,15 @@ pub(crate) fn may_navigate<'gc>(
             .context_document_id(context)
             .and_then(|id| cx.node_by_id(id)),
     };
-    initiator.is_some_and(|initiator| crate::frame::same_origin(cx, initiator, document))
+    if url.scheme() == "javascript"
+        && !initiator.is_some_and(|initiator| crate::frame::same_origin(cx, initiator, document))
+    {
+        return false;
+    }
+    // A sandboxed initiator's frame navigates its own and those below it,
+    // and the top-level one as its flags say.
+    initiator
+        .is_none_or(|initiator| crate::frame::sandbox_allows_navigation(cx, initiator, document))
 }
 
 /// HTML's navigate of `document`'s frame to `url` (absolute already), its
@@ -149,7 +154,11 @@ pub(crate) fn run_javascript_urls<H: ScriptHost>(host: &mut H, document: &NodeRo
         // URL": a document sandboxed without `allow-scripts` runs none).
         let Some((document_url, base_url)) = host.read(|cx| {
             let document = document.get(cx.gc);
-            (!crate::frame::scripting_disabled(cx, document)).then(|| {
+            let disabled = crate::frame::scripting_disabled(cx, document);
+            if disabled {
+                crate::frame::note_blocked_script(cx, document);
+            }
+            (!disabled).then(|| {
                 (
                     cx.document_url(document)
                         .map(|url| url.to_string())

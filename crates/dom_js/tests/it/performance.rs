@@ -160,7 +160,12 @@ fn what_observe_ignores_is_warned_of() {
          new PerformanceObserver(() => {}).observe({ type: 'mark', buffered: true }); 0",
     );
     assert_eq!(
-        page.engine.dom_mut().take_console_warnings(),
+        page.engine
+            .dom_mut()
+            .take_console_notes()
+            .into_iter()
+            .map(|note| note.text)
+            .collect::<Vec<_>>(),
         [
             "The entry type 'nope' does not exist or isn't supported.",
             "The entry type 'x' does not exist or isn't supported.",
@@ -168,7 +173,12 @@ fn what_observe_ignores_is_warned_of() {
         ]
     );
     assert_eq!(
-        page.engine.dom_mut().take_console_warnings(),
+        page.engine
+            .dom_mut()
+            .take_console_notes()
+            .into_iter()
+            .map(|note| note.text)
+            .collect::<Vec<_>>(),
         Vec::<String>::new()
     );
 }

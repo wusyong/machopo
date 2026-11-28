@@ -1,0 +1,393 @@
+# Stage 2's mutants (navigation, new windows, history and the console's messages): `python3 scripts/test.py mutate rfcs/0130-iframe-sandbox/mutants-2.toml`.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "frames::"]
+timeout = 2400
+
+# The navigations a sandboxed frame may make (`dom_api`'s `frame.rs`).
+
+[[mutant]]
+name = "a frame not sandboxed so is checked as one"
+file = "crates/dom_api/src/frame.rs"
+from = '''    if elise::Gc::ptr_eq(source, target) || !flags.contains(SandboxFlags::NAVIGATION) {'''
+to = '''    if elise::Gc::ptr_eq(source, target) {'''
+
+[[mutant]]
+name = "a frame may not navigate itself"
+file = "crates/dom_api/src/frame.rs"
+from = '''    if elise::Gc::ptr_eq(source, target) || !flags.contains(SandboxFlags::NAVIGATION) {'''
+to = '''    if !flags.contains(SandboxFlags::NAVIGATION) {'''
+
+[[mutant]]
+name = "no frame is below it"
+file = "crates/dom_api/src/frame.rs"
+from = '''        if elise::Gc::ptr_eq(at, source) {
+            below = true;'''
+to = '''        if elise::Gc::ptr_eq(at, source) {
+            below = false;'''
+
+[[mutant]]
+name = "every frame is the top-level one"
+file = "crates/dom_api/src/frame.rs"
+from = '''    let top = cx.frame_owner(target).is_none();'''
+to = '''    let top = true;'''
+
+[[mutant]]
+name = "allow-top-navigation-by-user-activation doesn't count"
+file = "crates/dom_api/src/frame.rs"
+from = '''    } else if flags.contains(SandboxFlags::TOP_NAVIGATION)
+        && flags.contains(SandboxFlags::TOP_NAVIGATION_BY_USER_ACTIVATION)
+    {'''
+to = '''    } else if flags.contains(SandboxFlags::TOP_NAVIGATION)
+    {'''
+
+[[mutant]]
+name = "the user's activation doesn't count"
+file = "crates/dom_api/src/frame.rs"
+from = '''    } else if flags.contains(SandboxFlags::TOP_NAVIGATION)
+        && !cx
+            .window_of(source)'''
+to = '''    } else if flags.contains(SandboxFlags::TOP_NAVIGATION)
+        && true || !cx
+            .window_of(source)'''
+
+[[mutant]]
+name = "the top-level frame's activation counts"
+file = "crates/dom_api/src/frame.rs"
+from = '''            .window_of(source)
+            .is_some_and(|window| cx.has_transient_activation(window))'''
+to = '''            .window_of(target)
+            .is_some_and(|window| cx.has_transient_activation(window))'''
+
+[[mutant]]
+name = "the navigating frame's origin is told"
+file = "crates/dom_api/src/frame.rs"
+from = '''        .document_origin(target)
+        .map_or_else'''
+to = '''        .document_origin(source)
+        .map_or_else'''
+
+[[mutant]]
+name = "a navigation's message is a security one"
+file = "crates/dom_api/src/frame.rs"
+from = '''        source: dom::ConsoleSource::JavaScript,
+        level: dom::ConsoleLevel::Error,'''
+to = '''        source: dom::ConsoleSource::Security,
+        level: dom::ConsoleLevel::Error,'''
+
+[[mutant]]
+name = "a navigation's message isn't at the script"
+file = "crates/dom_api/src/frame.rs"
+from = '''    cx.add_console_note_at_script(dom::ConsoleNote {
+        source: dom::ConsoleSource::JavaScript,'''
+to = '''    cx.add_console_note(dom::ConsoleNote {
+        source: dom::ConsoleSource::JavaScript,'''
+
+[[mutant]]
+name = "a navigation's message ends with no new line"
+file = "crates/dom_api/src/frame.rs"
+from = '''from frame with URL '{source_url}'. {reason}\n"'''
+to = '''from frame with URL '{source_url}'. {reason}"'''
+
+[[mutant]]
+name = "a sandboxed initiator navigates any frame"
+file = "crates/dom_api/src/history.rs"
+from = '''    initiator
+        .is_none_or(|initiator| crate::frame::sandbox_allows_navigation(cx, initiator, document))'''
+to = '''    true'''
+
+# New windows.
+
+[[mutant]]
+name = "a frame without allow-popups opens a window"
+file = "crates/dom_api/src/frame.rs"
+from = '''    if !document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::POPUPS) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a new window's message isn't at the script"
+file = "crates/dom_api/src/frame.rs"
+from = '''    cx.add_console_note_at_script(dom::ConsoleNote {
+        source: dom::ConsoleSource::Security,'''
+to = '''    cx.add_console_note(dom::ConsoleNote {
+        source: dom::ConsoleSource::Security,'''
+
+[[mutant]]
+name = "a link to its own frame is a new window"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        if by_keys.is_none()
+            && chosen.is_none()
+            && !crate::frame::may_open_window(cx, document, url.as_str())'''
+to = '''        if by_keys.is_none()
+            && !crate::frame::may_open_window(cx, document, url.as_str())'''
+
+[[mutant]]
+name = "the user's keys' new tab is a new window"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        if by_keys.is_none()
+            && chosen.is_none()
+            && !crate::frame::may_open_window(cx, document, url.as_str())'''
+to = '''        if chosen.is_none()
+            && !crate::frame::may_open_window(cx, document, url.as_str())'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::query_element::a_click_in"]
+
+[[mutant]]
+name = "the user's keys' new tab is called a new window"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''                    background,
+                    new_window: false,'''
+to = '''                    background,
+                    new_window: true,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::query_element::a_click_in"]
+
+[[mutant]]
+name = "a new window is called the user's keys' new tab"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''                    background: false,
+                    new_window: true,'''
+to = '''                    background: false,
+                    new_window: false,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::query_element::a_click_in"]
+
+[[mutant]]
+name = "the renderer calls every new tab a new window"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                    new_window: *new_window,'''
+to = '''                    new_window: true,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::query_element::a_click_in"]
+
+[[mutant]]
+name = "the browser sandboxes the user's keys' new tab"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let sandbox = if new_window {
+            self.frame_tree.sandbox(initiator)'''
+to = '''        let sandbox = if true {
+            self.frame_tree.sandbox(initiator)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frames_new_window"]
+
+[[mutant]]
+name = "the browser lets a frame without allow-popups open a window"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if sandbox.contains(SandboxFlags::POPUPS) {
+            return self.received_bad_message(BadMessageReason::NewTabOfSandboxedFrame);'''
+to = '''        if false {
+            return self.received_bad_message(BadMessageReason::NewTabOfSandboxedFrame);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frames_new_window"]
+
+[[mutant]]
+name = "a new window escapes the sandbox"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let sandbox = if sandbox.contains(SandboxFlags::PROPAGATES_TO_AUXILIARY_BROWSING_CONTEXTS) {
+            sandbox'''
+to = '''        let sandbox = if false {
+            sandbox'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frames_new_window"]
+
+[[mutant]]
+name = "allow-popups-to-escape-sandbox doesn't count"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let sandbox = if sandbox.contains(SandboxFlags::PROPAGATES_TO_AUXILIARY_BROWSING_CONTEXTS) {
+            sandbox'''
+to = '''        let sandbox = if true {
+            sandbox'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frames_new_window"]
+
+[[mutant]]
+name = "a new tab's documents aren't sandboxed"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.frame_tree.set_main_frame_sandbox(params.sandbox);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frames_new_window"]
+
+[[mutant]]
+name = "the main frame's sandbox is set for no frame"
+file = "crates/browser/src/frame_tree.rs"
+from = '''            node.pending_sandbox = sandbox;
+        }
+    }'''
+to = '''            let _ = (node, sandbox);
+        }
+    }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frames_new_window"]
+
+# History.
+
+[[mutant]]
+name = "allow-top-navigation doesn't count in history"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    .contains(protocol::sandbox::SandboxFlags::TOP_NAVIGATION);'''
+to = '''                    .contains(protocol::sandbox::SandboxFlags::NAVIGATION);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frame_traverses"]
+
+[[mutant]]
+name = "a sandboxed frame traverses any frame"
+file = "crates/browser/src/web_contents.rs"
+from = '''                self.traverse(*offset as isize, true, sandboxed.then_some(*frame));'''
+to = '''                self.traverse(*offset as isize, true, None);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frame_traverses"]
+
+[[mutant]]
+name = "a sandboxed frame traverses the frames not below it alone"
+file = "crates/browser/src/web_contents.rs"
+from = '''                .any(|(frame, _)| !self.frame_tree.is_within(*frame, sandboxed))'''
+to = '''                .any(|(frame, _)| self.frame_tree.is_within(*frame, sandboxed))'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frame_traverses"]
+
+[[mutant]]
+name = "a frame isn't within itself"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        std::iter::successors(Some(frame), |at| self.nodes.get(at)?.parent).any(|at| at == ancestor)'''
+to = '''        std::iter::successors(self.nodes.get(&frame).and_then(|node| node.parent), |at| self.nodes.get(at)?.parent).any(|at| at == ancestor)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_sandboxed_frame_traverses"]
+
+[[mutant]]
+name = "a traversal of a frame not there isn't a bad message"
+file = "crates/browser/src/web_contents.rs"
+from = '''            RendererHostMsg::GoToEntryAtOffset { frame, offset } => {
+                if !self.frame_tree.contains(*frame) {'''
+to = '''            RendererHostMsg::GoToEntryAtOffset { frame, offset } => {
+                if false {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::a_bad_message_ends_the_renderer"]
+
+[[mutant]]
+name = "an about:blank isn't sandboxed by its initiator's flags"
+file = "crates/browser/src/web_contents.rs"
+from = '''            sandbox = sandbox | self.frame_tree.sandbox(initiator);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::an_about_blank"]
+
+# A `Location`'s asker.
+
+[[mutant]]
+name = "href's asker is the entry realm"
+file = "crates/dom_api/src/location.rs"
+from = '''    let by = op.incumbent_context(cx);
+    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, false, by);'''
+to = '''    let by = op.current_context(cx);
+    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, false, by);'''
+
+[[mutant]]
+name = "replace's asker is the entry realm"
+file = "crates/dom_api/src/location.rs"
+from = '''    let by = op.incumbent_context(cx);
+    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, true, by);'''
+to = '''    let by = op.current_context(cx);
+    check_may_navigate(cx, this, &url, by)?;
+    navigate(cx, this, url, true, by);'''
+
+[[mutant]]
+name = "the incumbent realm isn't found"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        let Some(global) = self.incumbent_window else {
+            return self.current_context(cx);
+        };'''
+to = '''        let Some(global) = None::<v8::Local<'s, v8::Object>> else {
+            return self.current_context(cx);
+        };'''
+
+# A blocked script's message.
+
+[[mutant]]
+name = "scripting disabled of no sandbox is told"
+file = "crates/dom_api/src/frame.rs"
+from = '''    if !document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::SCRIPTS) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a blocked script's message has a line"
+file = "crates/dom_api/src/frame.rs"
+from = '''        url,
+        line: None,
+    });
+}'''
+to = '''        url,
+        line: Some(0),
+    });
+}'''
+
+[[mutant]]
+name = "an element's blocked script isn't told"
+file = "crates/dom_api/src/script.rs"
+from = '''        crate::frame::note_blocked_script(cx, document);'''
+to = ''''''
+
+[[mutant]]
+name = "an event handler's blocked script isn't told"
+file = "crates/dom_js/src/handlers.rs"
+from = '''                dom_api::note_blocked_script(cx, owner_document);'''
+to = ''''''
+
+[[mutant]]
+name = "a javascript: URL's blocked script isn't told"
+file = "crates/dom_api/src/history.rs"
+from = '''                crate::frame::note_blocked_script(cx, document);'''
+to = ''''''
+
+# Where a message is.
+
+[[mutant]]
+name = "a message isn't placed at the script"
+file = "crates/dom_js/src/state.rs"
+from = '''        if scope.state().0.dom.console_notes_unplaced() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a message's line is 1-based"
+file = "crates/dom_js/src/state.rs"
+from = '''        .unwrap_or(0)
+        .saturating_sub(1);
+    Some((url, line))'''
+to = '''        .unwrap_or(0);
+    Some((url, line))'''
+
+[[mutant]]
+name = "an empty stack's frame is read"
+file = "crates/dom_js/src/state.rs"
+from = '''    if stack.get_frame_count() == 0 {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::query_element::a_click_in"]
+
+[[mutant]]
+name = "a message placed takes no URL"
+file = "crates/dom/src/console.rs"
+from = '''                note.url.clone_from(url);'''
+to = ''''''
+
+[[mutant]]
+name = "a placed message is placed again"
+file = "crates/dom/src/console.rs"
+from = '''            if std::mem::take(unplaced)'''
+to = '''            if *unplaced'''
+
+[[mutant]]
+name = "DevTools is told every message is JavaScript's"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''                dom::ConsoleSource::Security => "security",'''
+to = '''                dom::ConsoleSource::Security => "javascript",'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_a_sandbox_blocks"]
+
+[[mutant]]
+name = "DevTools is told no line"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''            line_number: note.line,'''
+to = '''            line_number: None,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::what_a_sandbox_blocks"]
+
+[[mutant]]
+name = "a new window's message of no script is at no URL"
+file = "crates/dom_api/src/frame.rs"
+from = '''        url: cx
+            .document_url(document)
+            .map(|url| url.to_string())
+            .unwrap_or_default(),
+        line: None,
+    });
+    false'''
+to = '''        url: String::new(),
+        line: None,
+    });
+    false'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "devtools_log::a_new_window_a_click"]

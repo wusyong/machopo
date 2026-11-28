@@ -1321,6 +1321,7 @@ fn a_link_to_a_new_tab_is_handed_to_the_embedder() {
             initiator: main,
             url: url.into(),
             disposition,
+            new_window: true,
         });
     };
     open(
@@ -1393,6 +1394,7 @@ fn a_page_may_not_navigate_to_a_data_url() {
         initiator: web_contents.devtools_frame_token(),
         url: "data:text/html,x".into(),
         disposition: WindowOpenDisposition::NewForegroundTab,
+        new_window: true,
     });
     assert_eq!(web_contents.latest_navigation_id(), 0);
     assert_eq!(web_contents.take_opened(), []);
@@ -4588,6 +4590,194 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// A page with an iframe sandboxed by `tokens` at `/child`, loaded:
+    /// the tab, its events and the frame.
+    fn with_sandboxed_frame(
+        server: &TestServer,
+        tokens: &str,
+    ) -> (WebContents, Receiver<ContentsEvent>, protocol::FrameToken) {
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(report(&mut web_contents, &host_rx), "loaded", "{tokens}");
+        let frame = web_contents.frame_tree().children(main)[0];
+        (web_contents, host_rx, frame)
+    }
+
+    /// The routes of a page whose iframe `tokens` sandbox, and of `/new`, a
+    /// new tab's.
+    fn sandboxing_server(tokens: &str) -> TestServer {
+        let html = format!(
+            "{}<iframe sandbox='{tokens}' src=/child></iframe>",
+            after_load("report('loaded')")
+        );
+        server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+            ("/new", Route::ok("text/html", "<!DOCTYPE html>new")),
+        ])
+    }
+
+    /// A new window a sandboxed frame opens (a target no frame has) is
+    /// sandboxed by its flags, of an opaque origin then, unless they let
+    /// it escape (`allow-popups-to-escape-sandbox`); the user's keys' new
+    /// tab is of no sandbox. One a frame sandboxed without `allow-popups`
+    /// opens, its renderer refuses first: the browser ends one that asks
+    /// (Chromium's `RFH_CREATE_NEW_WINDOW_FROM_SANDBOXED_FRAME`).
+    #[test]
+    fn a_sandboxed_frames_new_window_is_sandboxed_by_its_flags() {
+        for (tokens, new_window, opaque) in [
+            ("allow-popups", true, Some(true)),
+            (
+                "allow-popups allow-popups-to-escape-sandbox",
+                true,
+                Some(false),
+            ),
+            ("allow-scripts", false, Some(false)),
+            ("allow-scripts", true, None),
+        ] {
+            let server = sandboxing_server(tokens);
+            let (mut opener, _opener_rx, frame) = with_sandboxed_frame(&server, tokens);
+            opener.on_renderer_message(&RendererHostMsg::OpenUrl {
+                initiator: frame,
+                url: server.url("/new"),
+                disposition: WindowOpenDisposition::NewForegroundTab,
+                new_window,
+            });
+            let Some(opaque) = opaque else {
+                assert!(opener.is_crashed(), "{tokens}");
+                assert_eq!(opener.take_opened(), [], "{tokens}");
+                opener.shutdown();
+                continue;
+            };
+            assert!(!opener.is_crashed(), "{tokens}");
+            let [opened] = <[_; 1]>::try_from(opener.take_opened()).expect("one new tab");
+            let (mut tab, tab_rx) = tab();
+            let main = tab.devtools_frame_token();
+            tab.navigate_opened(&opened);
+            wait_for(&mut tab, &tab_rx, |msg| {
+                matches!(msg, RendererHostMsg::DidCommitNavigation { .. }).then_some(())
+            });
+            assert_eq!(
+                tab.frame_tree().url(main),
+                Some(server.url("/new").as_str())
+            );
+            let origin = tab.frame_tree().origin(main).cloned().unwrap();
+            assert_eq!(!origin.is_tuple(), opaque, "{tokens} {new_window}");
+            let flags = if opaque {
+                protocol::sandbox::parse(tokens).flags
+            } else {
+                protocol::sandbox::SandboxFlags::NONE
+            };
+            assert_eq!(tab.frame_tree().sandbox(main), flags, "{tokens}");
+            tab.shutdown();
+            opener.shutdown();
+        }
+    }
+
+    /// An `about:blank` a sandboxed frame navigates the top-level frame to
+    /// (`allow-top-navigation`) is sandboxed by the frame's flags, as it is
+    /// of its origin (a local scheme's document inherits its initiator's
+    /// policies); one the top-level frame's document asks for, of none.
+    #[test]
+    fn an_about_blank_is_sandboxed_by_its_initiators_flags() {
+        let tokens = "allow-scripts allow-same-origin allow-top-navigation";
+        for (sandbox, from_child) in [(tokens, true), ("", false)] {
+            let page = if from_child {
+                format!("<!DOCTYPE html><iframe sandbox='{sandbox}' src=/child></iframe>")
+            } else {
+                "<!DOCTYPE html><script>location.href = 'about:blank';</script>".to_owned()
+            };
+            let server = server(&[
+                ("/", Route::ok("text/html", page)),
+                (
+                    "/child",
+                    Route::ok(
+                        "text/html",
+                        "<!DOCTYPE html><script>top.location.href = 'about:blank';</script>",
+                    ),
+                ),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            let main = web_contents.devtools_frame_token();
+            web_contents.navigate(server.url("/"));
+            wait_for(&mut web_contents, &host_rx, |msg| {
+                matches!(
+                    msg,
+                    RendererHostMsg::DidCommitNavigation { frame, url, .. }
+                        if *frame == main && url == "about:blank"
+                )
+                .then_some(())
+            });
+            let flags = protocol::sandbox::parse(tokens).flags;
+            let expected = if from_child {
+                flags
+            } else {
+                protocol::sandbox::SandboxFlags::NONE
+            };
+            assert_eq!(
+                web_contents.frame_tree().url(main),
+                Some("about:blank"),
+                "{from_child}"
+            );
+            assert_eq!(
+                web_contents.frame_tree().sandbox(main),
+                expected,
+                "{from_child}"
+            );
+            web_contents.shutdown();
+        }
+    }
+
+    /// A frame sandboxed without `allow-top-navigation` traverses its
+    /// history only where it and the frames below it change (Chromium's
+    /// `DoesSandboxNavigationStayWithinSubtree`): its `go(-2)`, which would
+    /// change the top-level frame's entry too, does nothing; its `back()`
+    /// after, its own entry alone, goes. With it, `go(-2)` goes.
+    #[test]
+    fn a_sandboxed_frame_traverses_its_own_entries_alone() {
+        for (tokens, expected, index) in [
+            ("allow-scripts allow-same-origin", "child--#t", 1),
+            (
+                "allow-scripts allow-same-origin allow-top-navigation",
+                "child--",
+                0,
+            ),
+        ] {
+            let html = format!(
+                "{}<iframe sandbox='{tokens}' src=/child></iframe>",
+                logging(
+                    "const child = frames[0];
+                     child.onpopstate = () => note(`child-${child.location.hash}-${location.hash}`);
+                     history.pushState(null, '', '#t');
+                     child.history.pushState(null, '', '#c');
+                     child.history.go(-2);
+                     child.history.back();",
+                )
+            );
+            let server = server(&[
+                ("/", Route::ok("text/html", html)),
+                ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            web_contents.navigate(server.url("/"));
+            if index == 0 {
+                // Both frames go back to the first entry, their events in
+                // any order (the browser hears of each commit before the
+                // events it fires); the `back()` after, past it, goes
+                // nowhere.
+                logged(&mut web_contents, &host_rx);
+                while history(&web_contents).1 != Some(0) {
+                    logged(&mut web_contents, &host_rx);
+                }
+            } else {
+                assert_eq!(logged(&mut web_contents, &host_rx), expected, "{tokens}");
+            }
+            assert_eq!(history(&web_contents).1, Some(index), "{tokens}");
+            web_contents.shutdown();
+        }
+    }
+
     /// A child frame's `location.reload()` is the browser's to load, from
     /// the URL it has for the frame: its document loaded again, a reload.
     #[test]
@@ -4945,8 +5135,8 @@ document.querySelector('base').setAttribute('href', '/later/');
         wait_until_loaded(&mut web_contents, &host_rx);
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there, a new
-        // tab by one: each to the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 18] = [
+        // tab or a traversal by one: each to the renderer of the time.
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 19] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -4989,6 +5179,7 @@ document.querySelector('base').setAttribute('href', '/later/');
                 initiator: protocol::FrameToken([0xEE; 16]),
                 url: "https://a.test/".into(),
                 disposition: WindowOpenDisposition::NewForegroundTab,
+                new_window: true,
             },
             // A commit in a frame not there.
             |_, _| RendererHostMsg::DidCommitNavigation {
@@ -5030,6 +5221,11 @@ document.querySelector('base').setAttribute('href', '/later/');
                 replace: false,
                 state: None,
                 navigation_id: None,
+            },
+            // A traversal of a frame not there's history.
+            |_, _| RendererHostMsg::GoToEntryAtOffset {
+                frame: protocol::FrameToken([0xEE; 16]),
+                offset: -1,
             },
             // A scroll restoration mode of a frame not there.
             |_, _| RendererHostMsg::UpdateState {
@@ -6585,6 +6781,68 @@ mod query_element {
         ));
         until(&mut web_contents, CursorType::Help);
         web_contents.shutdown();
+    }
+
+    /// The user's click on a link to a new window in a sandboxed frame:
+    /// without `allow-popups` it opens none (nor is its renderer ended for
+    /// asking), the middle button's new tab it does, of no sandbox; with
+    /// it, a new window, for its flags.
+    #[test]
+    fn a_click_in_a_sandboxed_frame_opens_a_window_as_its_flags_say() {
+        for (tokens, button, opened) in [
+            ("allow-scripts", MouseButton::Left, None),
+            ("allow-scripts", MouseButton::Middle, Some(false)),
+            ("allow-popups", MouseButton::Left, Some(true)),
+        ] {
+            let page = format!(
+                "<!DOCTYPE html><style>html, body {{ margin: 0 }}</style>\
+                 <iframe sandbox='{tokens}' src=/child style='display: block; border: 0'></iframe>"
+            );
+            let child = "<!DOCTYPE html><style>body { margin: 0 } a { display: block; height: 20px }</style>\
+                <a href=/new target=_blank>new</a>";
+            let server = server(&[
+                ("/", Route::ok("text/html", page)),
+                ("/child", Route::ok("text/html", child)),
+            ]);
+            let (mut web_contents, host_rx, viz_rx, begin_frames) = tab_with_viz_flags(true, true);
+            web_contents.resize(gfx::Size::new(200, 200), 1.0);
+            let mut viz = DrivenViz::new(viz_rx, begin_frames);
+            web_contents.navigate(server.url("/"));
+            viz.until_loaded(&mut web_contents, &host_rx);
+            for event in [
+                InputEvent::mouse_down(10.0, 10.0, button, protocol::input::Modifiers::NONE),
+                InputEvent::mouse_up(10.0, 10.0, button, protocol::input::Modifiers::NONE),
+            ] {
+                web_contents.forward_input_event(event);
+            }
+            let mut asked = Vec::new();
+            let mut acks = 0;
+            let note = |asked: &mut Vec<bool>, msg: Option<&RendererHostMsg>| {
+                if let Some(RendererHostMsg::OpenUrl { new_window, .. }) = msg {
+                    asked.push(*new_window);
+                }
+            };
+            viz.run_until(&mut web_contents, &host_rx, "the click's acks", |_, msg| {
+                note(&mut asked, msg);
+                if matches!(msg, Some(RendererHostMsg::InputEventAck { .. })) {
+                    acks += 1;
+                }
+                acks == 2
+            });
+            // The click's task is over by the visual state it then gives.
+            web_contents.request_visual_state(1);
+            viz.run_until(&mut web_contents, &host_rx, "the visual state", |_, msg| {
+                note(&mut asked, msg);
+                matches!(
+                    msg,
+                    Some(RendererHostMsg::VisualStateReady { request_id: 1 })
+                )
+            });
+            assert_eq!(asked, Vec::from_iter(opened), "{tokens} {button:?}");
+            assert!(!web_contents.is_crashed(), "{tokens}");
+            assert_eq!(web_contents.take_opened().len(), asked.len(), "{tokens}");
+            web_contents.shutdown();
+        }
     }
 
     /// Input into a child frame: a click goes to the

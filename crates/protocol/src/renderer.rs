@@ -762,8 +762,13 @@ pub enum RendererHostMsg {
         navigation_id: u64,
     },
     /// `FrameHost::GoToEntryAtOffset`: `history.go(offset)` (and `back`,
-    /// `forward`), within range as the renderer knew it.
-    GoToEntryAtOffset(i32),
+    /// `forward`) of `frame`'s document's `History`, within range as the
+    /// renderer knew it. A frame sandboxed without `allow-top-navigation`
+    /// goes only where the frames that change are it and those below it.
+    GoToEntryAtOffset {
+        frame: crate::FrameToken,
+        offset: i32,
+    },
     /// `NavigationClient`'s `NotifyNavigationCancellationWindowEnded`: the
     /// task that asked for the renderer's navigations `ids`
     /// (`BeginNavigation`'s) is over, and what it asked of the browser
@@ -815,10 +820,15 @@ pub enum RendererHostMsg {
     /// browser decides whether to open, as frame `initiator` asked (its
     /// document's origin the new tab's navigation's initiator, as
     /// `OpenURLParams::initiator_origin`, by the browser's frame tree).
+    /// `new_window`: a new window the page opens (a target no frame has;
+    /// `FrameHost::CreateNewWindow`), which a frame sandboxed without
+    /// `allow-popups` may not and whose sandbox goes to it; else one the
+    /// user's keys asked for, of no sandbox.
     OpenUrl {
         initiator: crate::FrameToken,
         url: String,
         disposition: WindowOpenDisposition,
+        new_window: bool,
     },
     /// `FrameHost::CreateChildFrame`: the renderer made child frame `frame`
     /// of `parent` (an iframe inserted), at once and on its own, as script

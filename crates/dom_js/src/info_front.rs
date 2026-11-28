@@ -869,6 +869,9 @@ pub(crate) struct InfoFront<'s, K: InfoKind<'s> = Method> {
     /// asks for instead (`Front::prepare_relevant_window`, the incumbent's,
     /// the entry's): its global, found before the operation.
     other_window: Option<v8::Local<'s, v8::Object>>,
+    /// The incumbent realm's window, as well as the entry's
+    /// (`Front::prepare_entry_and_incumbent_windows`).
+    incumbent_window: Option<v8::Local<'s, v8::Object>>,
     /// What the call notes as its result is given.
     noted: K::Noted,
 }
@@ -880,6 +883,7 @@ pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = Method> {
     this: K::This,
     window: bool,
     other_window: Option<v8::Local<'s, v8::Object>>,
+    incumbent_window: Option<v8::Local<'s, v8::Object>>,
     noted: &'o mut K::Noted,
     caches: &'o Caches,
 }
@@ -944,6 +948,7 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
             info,
             window: false,
             other_window: None,
+            incumbent_window: None,
             noted: K::Noted::default(),
         }
     }
@@ -1287,13 +1292,15 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
         let this = K::this(&self.info);
-        let (window, other_window) = (self.window, self.other_window);
+        let (window, other_window, incumbent_window) =
+            (self.window, self.other_window, self.incumbent_window);
         let (state, no_gc) = self.info.state();
         let mut op = InfoOp {
             no_gc,
             this,
             window,
             other_window,
+            incumbent_window,
             noted: &mut self.noted,
             caches: &state.caches,
         };
@@ -1308,7 +1315,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
         let this = K::this(&self.info);
-        let (window, other_window) = (self.window, self.other_window);
+        let (window, other_window, incumbent_window) =
+            (self.window, self.other_window, self.incumbent_window);
         let (state, no_gc) = self.info.state_mut();
         let State {
             dom,
@@ -1321,6 +1329,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
             this,
             window,
             other_window,
+            incumbent_window,
             noted: &mut self.noted,
             caches,
         };
@@ -1815,6 +1824,18 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     #[inline(never)]
     fn prepare_incumbent_window(&mut self) {
         self.other_window = Some(self.info.with_scope(|mut scope, _| {
+            let scope = scope.scope();
+            let context = scope.get_incumbent_context();
+            v8::Local::new(scope, context).global(scope)
+        }));
+    }
+
+    /// The entry realm's window and the incumbent's: V8's to find, in a
+    /// scope.
+    #[inline(never)]
+    fn prepare_entry_and_incumbent_windows(&mut self) {
+        self.prepare_entry_window();
+        self.incumbent_window = Some(self.info.with_scope(|mut scope, _| {
             let scope = scope.scope();
             let context = scope.get_incumbent_context();
             v8::Local::new(scope, context).global(scope)
@@ -2435,6 +2456,18 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
             }
             None => f(None),
         }
+    }
+
+    fn incumbent_context<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+    ) -> Option<elise::Gc<'gc, dom::ExecutionContext>> {
+        let Some(global) = self.incumbent_window else {
+            return self.current_context(cx);
+        };
+        self.no_gc
+            .unwrap::<Window>(cx.gc, global)
+            .map(|window| cx.window_context(window))
     }
 
     #[inline(always)]

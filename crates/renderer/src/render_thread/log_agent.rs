@@ -1,7 +1,7 @@
 //! DevTools' `Log` domain as the renderer answers it (Blink's
 //! `InspectorLogAgent` over the page's `ConsoleMessageStorage`): the
 //! messages the page's loads give (a response of 400 or more, a load that
-//! failed) and the warnings script's calls earn (`javascript_warning`),
+//! failed) and the messages the DOM's operations leave (`of_dom`: a warning script's calls earn, what a sandbox blocked),
 //! kept whether or not DevTools is there, the newest 1000, and
 //! sent to each session that turned `Log` on, the kept ones first. Each is
 //! printed to stderr as the console's messages are, as Chrome prints them
@@ -84,16 +84,23 @@ impl LogEntry {
         }
     }
 
-    /// A warning about what script asked (`source` `javascript`,
-    /// `warning`), now.
-    pub(crate) fn javascript_warning(text: String) -> Self {
+    /// A message the DOM's operations left (a warning about what script
+    /// asked, what a sandbox blocked), now.
+    pub(crate) fn of_dom(note: dom::ConsoleNote) -> Self {
         Self {
-            source: "javascript",
-            level: "warning",
-            text,
-            url: String::new(),
+            source: match note.source {
+                dom::ConsoleSource::JavaScript => "javascript",
+                dom::ConsoleSource::Security => "security",
+                dom::ConsoleSource::Other => "other",
+            },
+            level: match note.level {
+                dom::ConsoleLevel::Warning => "warning",
+                dom::ConsoleLevel::Error => "error",
+            },
+            text: note.text,
+            url: note.url,
             network_request_id: None,
-            line_number: None,
+            line_number: note.line,
             timestamp: wall_time() * 1000.0,
         }
     }

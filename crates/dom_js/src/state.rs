@@ -406,10 +406,17 @@ fn queue_microtasks(scope: &mut Scope<'_, '_, '_>, microtasks: dom::Microtasks) 
         dom_api::settle_animation_notices(&mut crate::listeners::Host { scope });
     }
     // Nor the stack of the script that asked for loads in the operation,
-    // for DevTools (V8 allocates: not in one).
+    // for DevTools, and where the script is for the console's messages it
+    // left (V8 allocates: not in one).
     if microtasks.stacks() {
-        let stack = capture_stack(scope);
-        scope.state().0.dom.note_request_stacks(stack);
+        if scope.state().0.dom.console_notes_unplaced() {
+            let at = script_location(scope);
+            scope.state().0.dom.place_console_notes(at);
+        }
+        if scope.state().0.dom.request_stacks_awaited() {
+            let stack = capture_stack(scope);
+            scope.state().0.dom.note_request_stacks(stack);
+        }
     }
     // Nor the `fetch()`es: sent before the call returns, after the blob
     // URLs the operation registered (`update_elements`).
@@ -424,6 +431,24 @@ fn queue_microtasks(scope: &mut Scope<'_, '_, '_>, microtasks: dom::Microtasks) 
     if microtasks.storage() {
         crate::frames::send_storage_changes(scope);
     }
+}
+
+/// The URL and 0-based line of the script running, its innermost frame's
+/// (Blink's `CaptureSourceLocation`): none outside script.
+fn script_location(scope: &mut Scope<'_, '_, '_>) -> Option<(String, u32)> {
+    let scope = scope.scope();
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    // V8 reads past an empty stack's frames: one is asked for only if
+    // there is (a user's click runs no script).
+    if stack.get_frame_count() == 0 {
+        return None;
+    }
+    let frame = stack.get_frame(scope, 0)?;
+    let url = frame.get_script_name(scope)?.to_rust_string_lossy(scope);
+    let line = u32::try_from(frame.get_line_number())
+        .unwrap_or(0)
+        .saturating_sub(1);
+    Some((url, line))
 }
 
 /// The stack of the script running, with every async parent, as DevTools'

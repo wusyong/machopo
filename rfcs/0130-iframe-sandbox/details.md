@@ -27,9 +27,30 @@
 - **renderer（Blink）**：script 是 `LocalDOMWindow::CanExecuteScripts`（`kScripts`）；導覽是 `LocalFrame::CanNavigate`：有 `kNavigation` 時只能導覽自己和自己底下的 frame，或最上層；最上層要沒有 `kTopNavigation`，或只有 `kTopNavigationByUserActivation` 而且有使用者的啟動（沒有時 `DidBlockNavigation` 告訴 Browser、寫 console）；導覽彈出視窗要是它的 opener 而且旗標會帶過去；每一種擋下的都寫 console（「The frame attempting navigation is sandboxed, and is therefore disallowed from navigating its ancestors.」等）。開新視窗是 `blink::CreateNewWindow`（`kPopups`）。
 - **Browser**：`RenderFrameHostImpl::CreateNewWindow`：沒有 `allow-popups` 的 frame 要開新視窗是壞訊息（`RFH_CREATE_NEW_WINDOW_FROM_SANDBOXED_FRAME`，註解：「This should have already been checked by the renderer process (see blink::CreateNewWindow()), and this browser-side check defends against compromised renderers」）。`DidChangeFramePolicy`：只收對直接的子 frame 改的（`FindAndVerifyChild`，不是的是壞訊息 `RFH_SANDBOX_FLAGS`）。導覽最上層的 sandbox 的旗標 Browser 不再檢查（只有 fenced frame 的 `ValidateUnfencedTopNavigation`）。`navigation_request.cc` 另外記「跨源的子 frame 沒有使用者的啟動不能導覽最上層」（crbug.com/1251790），`sandbox` 沒有拿掉 `allow-top-navigation` 時例外：這是 framebusting 的介入，不是 sandbox。
 
+### 第 2 段讀的（2026-11-28）
+
+- **新視窗和新分頁不是同一條路**：Blink 的 `FrameTree::FindOrCreateFrameForNavigation`：導覽的 policy 不是目前的分頁（Ctrl、中鍵：使用者的按鍵改了它）時，直接回到發起的 frame，交給 Browser 照 policy 開（`OpenURL`，不經過 `CreateNewWindow`，Browser 的 `RenderFrameHostImpl::OpenURL` 不看 `kPopups`）；只有 untrusted 的事件（script 的 `click()`、`dispatchEvent`）帶的修飾鍵，在有 `kPopups`（feature 開著時加上 `kPropagatesToAuxiliaryBrowsingContexts`）的 frame 裡被改回目前的分頁，免得 script 用假的 Ctrl 開出不帶沙箱的新分頁。找不到 target 的才 `CreateNewWindow`：它一開始就看 `kPopups`，擋下時寫「Blocked opening …」，不管事件是不是 trusted（popup blocker 在後面）。
+- **`Location` 的發起者**：Blink 的 `Location::SetLocation(url, incumbent_window, entered_window, …)`：網址照 entered window（entry realm）解析，`CanNavigate` 問 incumbent window 的 frame，不准時丟 `SecurityError`（「The current window does not have permission to navigate the target frame to '…'.」）。HTML 的 Location-object navigate 的 sourceDocument 也是 incumbent 的。
+- **history**：Blink 的 `History::go` 不看旗標，交給 `History` 的 window 的 frame 的 `NavigateBackForward`；Browser 的 `NavigationControllerImpl` 在發起的 frame 有 `kTopNavigation` 時（不是 `kNavigation`：有 `allow-top-navigation` 的照樣走），要導覽的 frame 有任何一個不在它底下就整個不走（`DoesSandboxNavigationStayWithinSubtree`，同一份文件內的和跨文件的都算；註解：「we don't want to end up in a history state that didn't exist before」），Navigation API 的 traverse 收到 `kSandboxViolation`。
+
 ## 沒讀到的
 
-- `about:blank`、`about:srcdoc`、`javascript:` 的文件繼承旗標的細節（`PolicyContainerHost` 的繼承），和 `<noscript>` 的解析在哪裡看旗標：實作時讀。
+- `<noscript>` 的解析在哪裡看旗標：照 HTML 的「scripting is disabled」做，沒有對照 Blink 的位置。
+
+## Chrome 實測：被擋時的 console 訊息（第 2 段開始前）
+
+2026-11-28，Chromium 156（Fedora），headless，`--remote-debugging-pipe`，每個 target 都 attach、開 `Log`（sandbox 的 frame 在自己的 target）。頁面放幾個 iframe：沒有 `allow-scripts` 的 `srcdoc` 裡有 script；`sandbox="allow-scripts bogus allow-nonsense"`；`allow-scripts` 的 `srcdoc` 試著導覽最上層、導覽兄弟 frame、`window.open`；`allow-scripts allow-top-navigation-by-user-activation` 的沒有啟動就導覽最上層。sandbox 的 frame 共用一個 process，後 attach 的 session 在 `Log.enable` 時重播前面的訊息；表裡只記第一次。
+
+| 被擋的 | `source`、`level` | 原文 | 掛在哪、`url`、`lineNumber` |
+| --- | --- | --- | --- |
+| 屬性裡不認得的 token | `other`、`error` | `Error while parsing the 'sandbox' attribute: 'bogus', 'allow-nonsense' are invalid sandbox flags.` | iframe 所在的文件；它的網址、iframe 所在的行（從 0 算） |
+| script（沒有 `allow-scripts`） | `security`、`error` | `Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.` | 那份文件；它的網址，沒有行號 |
+| 導覽最上層 | `javascript`、`error` | `Unsafe attempt to initiate navigation for frame with origin 'http://127.0.0.1:8791' from frame with URL 'about:srcdoc'. The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set.` 加 `\n` | 發起的文件；它的網址、script 的行（從 0 算） |
+| 導覽祖先、兄弟 frame | `javascript`、`error` | `Unsafe attempt to initiate navigation for frame with origin '…' from frame with URL '…'. The frame attempting navigation is sandboxed, and is therefore disallowed from navigating its ancestors.` 加 `\n` | 同上 |
+| 只有 `-by-user-activation`、沒有啟動 | `javascript`、`error` | `… The frame attempting navigation of the top-level window is sandboxed with the 'allow-top-navigation-by-user-activation' flag, but has no user activation (aka gesture). See https://www.chromestatus.com/feature/5629582019395584.` 加 `\n` | 同上 |
+| 開新視窗（`window.open`） | `security`、`error` | `Blocked opening 'http://127.0.0.1:8791/popup' in a new window because the request was made in a sandboxed frame whose 'allow-popups' permission is not set.` | 同上 |
+
+「for frame with origin」是目標 frame 的文件的 origin（序列化，沒有結尾的 `/`），「from frame with URL」是發起的文件的網址。開新視窗的那句是 Blink 的 `CreateNewWindow`，連結的 `target=_blank` 也走它。
 
 ## WPT
 

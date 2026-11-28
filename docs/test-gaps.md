@@ -10,7 +10,6 @@
 | --- | --- | --- | --- |
 | renderer 在發起的文件已經不在時（`dom_api` 的 `load_origin` 找不到 document，origin 是 `None`）不送圖片、script 和 stylesheet 的請求（`renderer` 的 `documents.rs` 的 `start_image_fetch`、`start_script_fetch`、`start_sheet_fetch`）：Browser 把不帶發起者的請求當成壞訊息，送出去會結束 renderer | 要 DOM 排著一個載入、它的 document 在送出之前就不在了，測試做不出這個時機；拿掉時沒有測試失敗 | 審查；三處同一行（`request_origin?`），`None` 是 `LoadSink` 約定的「沒有送出、當場失敗」 | 有能控制「排著的載入」和「文件不在」的先後的測試工具時補 |
 | renderer 的鎖拒絕 Browser 要交出的東西時（`browser` 的 `WebContents::commit` 裡 `set_site_info`、`register_loader` 失敗的那兩支，`open_storage_area` 的檢查，`lock_mismatch`）：不交出、當成壞訊息結束 renderer | 換不換和 commit 的檢查是同一個比較（`site_info::admits`），loader 和 storage key 的最上層網站從 frame 樹算，而 frame 樹在換 renderer、renderer 不在了時清成一個 opaque 的 main frame：renderer 送什麼都做不出不合鎖的東西，只有 Browser 自己的 bug 走得到。拿掉這幾支時沒有測試失敗 | 審查；比較本身有單元測試（`site_info` 的 `a_renderer_is_given_only_its_top_level_sites`，`render_process_host` 的 `a_renderer_is_locked_to_its_first_site`：鎖之後不變、不合的 loader 不登記） | 加了別的決定 renderer 的路（`window.open`、OOPIF）時，看它能不能在測試裡做出不合鎖的狀態；做得出就補整合測試 |
-| `document.cookie` 對 opaque origin 的文件丟 `SecurityError`（`dom_api` 的 `cookie.rs` 的 `Access::Opaque`） | machopo 沒有 iframe 的 `sandbox`：HTTP(S) 網址的文件都不是 opaque 的，opaque 的（`data:`、錯誤頁）網址不是 HTTP(S)，先算 cookie-averse | 審查，照 HTML 的步驟和 Chromium 的 `Document::cookie` | 有 `sandbox` 時用 WPT 的 sandbox 的 cookie 測試守 |
 | renderer 送來壞掉的 `GetCookies`、`CookiesEnabled`（沒給的 loader、opaque 的、別的 origin 的網址）時，IO thread 照樣回答（空的、false），main thread 不會一直等（`browser` 的 `render_process_host.rs`） | 正常的 renderer 不會送；送了的 renderer 本來就會被結束，結束時等待的呼叫也會放棄 | 審查；核對本身有單元測試（`script_cookies_are_of_the_loaders_origin`） | 有能送壞掉的訊息的假 renderer 時補 |
 | Browser 的字型 thread 送不出開著的檔案時，改送一個沒有檔案的回答（`browser` 的 `font_data_service.rs` 的 `send`）；字型 thread 不在時 IO thread 直接回答沒有（`FontDataService::ask`）：renderer 的 main thread 在等這兩個回答 | 送不出檔案要 kernel 拒絕把 handle 複製給 renderer（通道已經關掉時，改送的那一則也送不出，沒有人在等）；字型 thread 啟動之後不結束 | 審查：每個問題都要有回答，不然那個 renderer 的 main thread 永遠等著 | 不處理 |
 | `--single-process` 和在測試的 process 裡建的分頁也向字型 thread 問系統的字型（`browser` 的 `render_process_host.rs` 的 `RendererLauncher::InProcess` 給 `SystemFontSource::Browser`） | 改成自己找系統的字型時，排出來的字一樣，Browser 的 process 本來就讀得到字型、載入 `dwrite.dll`、連得到系統的字型服務；renderer process 的那兩種（sandbox 裡外）由 `shell` 的 `a_renderer_process_has_the_systems_fonts_from_its_browser`（Windows）、`a_sandboxed_renderer_shows_a_page_as_one_outside_does`（Linux、macOS：sandbox 裡讀不了字型，自己找的話排出來和外面的、thread 上的不同）守 | 審查；兩種 renderer 拿的是同一份名字的清單、同一個字型 thread | 字型 thread 有計數（回答過幾個 renderer）時，在 `shell` 的測試裡看它 |
@@ -330,6 +329,10 @@
 ## 等價、不用處理的 mutation
 
 弄壞之後行為完全一樣，記在這裡免得重複追查。
+
+**`data:` 網址的文件照發起者的 sandbox 旗標（`browser` 的 `WebContents::begin_navigation` 的 `local_scheme`，`about:blank` 也是）**
+
+- 拿掉 `data:` 的那一半時看不出：sandbox 的發起者能導覽的 frame，不是它自己和它底下的（已經帶著它的旗標），就是最上層，而頁面不能把最上層導覽到 `data:`（`page_may_navigate_to`），開新分頁也不行。留著是照 Chromium 的 local scheme 繼承發起者的 policy；有了 `window.open` 的 opener 導覽它開的視窗、或 CSP 的 `sandbox` 時不再等價，那時補測試。`about:blank` 的那一半有測試（`browser` 的 `navigation::links::an_about_blank_is_sandboxed_by_its_initiators_flags`）。
 
 **ORB 把 `image/svg+xml`、`application/dash+xml` 先分到「其他」，不讓 `+xml` 的字尾把它們當成 XML（`net` 的 `orb.rs` 的 `kind`）**
 

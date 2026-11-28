@@ -42,6 +42,7 @@ pub(crate) fn compile_event_handler(
                 _ => cx.document_of(element),
             };
             if dom_api::scripting_disabled(cx, owner_document) {
+                dom_api::note_blocked_script(cx, owner_document);
                 return Some(None);
             }
             let (scopes, document) = match target.get(cx.gc) {

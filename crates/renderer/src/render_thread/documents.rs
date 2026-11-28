@@ -3678,7 +3678,11 @@ impl dom_api::FrameClient for RendererFrameClient {
             }
             // Whichever frame's link: the browser opens the tab, as the
             // frame whose link it is asked.
-            FrameNavigation::NewTab { url, background } => {
+            FrameNavigation::NewTab {
+                url,
+                background,
+                new_window,
+            } => {
                 let disposition = if *background {
                     protocol::renderer::WindowOpenDisposition::NewBackgroundTab
                 } else {
@@ -3692,13 +3696,19 @@ impl dom_api::FrameClient for RendererFrameClient {
                     initiator,
                     url: url.clone(),
                     disposition,
+                    new_window: *new_window,
                 });
                 return None;
             }
+            // Of the frame whose `History` it is (Blink's
+            // `NavigateBackForward` of the window's frame), which asks.
             FrameNavigation::GoToOffset(delta) => {
-                let _ = self
-                    .to_browser
-                    .send(RendererHostMsg::GoToEntryAtOffset(*delta));
+                if let Some(frame) = asked.frame {
+                    let _ = self.to_browser.send(RendererHostMsg::GoToEntryAtOffset {
+                        frame,
+                        offset: *delta,
+                    });
+                }
                 return None;
             }
             FrameNavigation::ScrollRestoration { manual } => {
