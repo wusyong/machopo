@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1. 在 machopo 裡先切乾淨：`Cargo.toml` 不再從 workspace 繼承（lint 除外）、改掉提到 machopo 的地方、延後載入失敗的 hook；複製到外面單獨編和測；已決定的事項第 5、6 條 | 做完 | 2026-11-27 |
 | 2. 建 repo、搬出去：從一個新的 commit 開始，設定、文件、`sanity.py`、三個平台的 CI；已決定的事項第 7–9 條 | 做完 | 2026-11-28 |
-| 3. machopo 改接：`Cargo.toml`、`third_party.toml`、`sanity.py`、文件，拿掉 `crates/sunaba` | 還沒開始 | |
+| 3. machopo 改接：`Cargo.toml`、`third_party.toml`、`sanity.py`、文件，拿掉 `crates/sunaba` | 做完 | 2026-11-28 |
 
 ## 驗收
 
@@ -50,3 +50,13 @@
   - CI（`dacl-from-machopo`，run 46093751158）：三個平台和 lint 都通過；Windows 的整合測試 30 個（多了 `what_its_threads_make_isnt_for_the_logon_session`），兩種 feature 都是；Linux 22 個。sunaba 的 `main` fast-forward 到 7973001、push。
   - **和 CI 對不上的事實**：fc17f43d 和它的 `docs/test-gaps.md` 寫「CI 的 Windows runner 是 UAC 關掉的管理員，和 elevated 一樣，看不出來」，以及「不給使用者 `GENERIC_ALL` 是等價的 mutation」。sunaba 的第一次 CI（run 46091850428，`windows-latest`）讀到的 default DACL 是 Administrators、SYSTEM、logon session（`S-1-5-5-0-…`）和 AppContainer、沒有使用者：logon session 在上面（那個測試就是因此失敗的），使用者不在上面（`GENERIC_ALL` 那個 mutation 在 runner 上抓得到）。sunaba 的 `docs/testing.md` 照這個寫；machopo 的 `docs/test-gaps.md` 的那兩條第 3 段搬走時拿掉。
 - 推送：HTTPS 沒有認證，`origin` 的 push URL 設成 SSH（`git@github.com:wusyong/sunaba.git`，只在 ../third_party/sunaba 的設定），fetch 照舊是 HTTPS。
+
+### 3（2026-11-28，macOS 26，Apple Silicon）
+
+- **`test.py mutate`（已決定的事項第 12 條）**：`mutant_path`（spec 的 `file` 照文字拿掉 `..`）、`saved_original`（machopo 的檔案照舊在 `originals/<路徑>`，machopo 以外的在 `originals/_outside/<相對於上一層的路徑>`）、`original_home`（反過來，`--restore` 用）；`load_mutants` 在動手之前拒絕 machopo 的上一層以外的檔案。新的測試 `scripts/mutate_test.py`（5 個：兩種檔案放在哪裡、`--restore` 放回被強制結束的 run 留下的兩種、一次 run 的期間 machopo 以外的原檔在 `_outside/`、跑完放回去、更外面的拒絕），加進 CI 的 lint job 和 `docs/testing.md` 的表。
+- **Mutation test**（`mutants-3.toml`，6 個，`--keep-going`）：原檔照舊放在 `originals/` 外面、不放在 `_outside/`、spec 的路徑不拿掉 `..`、`_outside/` 的放回 machopo 裡、`--restore` 照舊照存的路徑放回、更外面的不拒絕：都由 `mutate_test.py` 抓到。跑完確認 `scripts/test.py` 還原了（只剩這一段的改動）。
+- **改接**：workspace 的 `sunaba` 改成 `path = "../third_party/sunaba"`，放在 elise 旁邊；`third_party.toml` 加 `[sunaba]`（釘 7973001，sunaba 的 CI 在三個平台上通過的 `main`）；拿掉 `crates/sunaba`；`Cargo.lock` 不變（path 依賴不記來源）。`ipc`、`shell` 照舊 `sunaba.workspace = true`，程式不改。`ci.py third-party` 不用改：把 ../third_party/sunaba 移開再跑，它照 `third_party.toml` shallow clone 到 7973001；放回去之後照樣認得本機的 checkout。
+- **`sanity.py`**：`unsafe` 的 `UNSAFE_ALLOWED` 和訊息拿掉 `sunaba`；`docs` 的 `GONE_CRATES` 加上 `sunaba`，路徑的比對也認沒有結尾 `/` 的 `crates/sunaba`：已完成的 RFC 照舊不檢查，進行中的 RFC 引用搬走之前的 `crates/sunaba` 底下的檔案和章節時也不檢查。
+- **文件**：`CLAUDE.md`（先讀 ../third_party/sunaba 的 soundness 和 contributing；`unsafe` 只在 `bindings` 和 `ipc`，elise 和 sunaba 照它們自己的規則；toolchain 一起調；第三方的那一節加上 sunaba 怎麼改、怎麼釘、mutation test 怎麼寫）、根目錄的 `README.md`（`../third_party/` 的樹）、`docs/README.md`（拿掉 `crates/sunaba/soundness.md` 那一列；調整 Rust 版本時 sunaba 也一起）、`docs/architecture.md`（`sunaba` 從 crate 的表搬到第三方的表，elise 的旁邊；`unsafe` 的位置）、`docs/test-gaps.md`（sunaba 自己的缺口拿掉：它們在 sunaba 的 `docs/testing.md` 裡；fc17f43d 加的「CI 守不住」和「不給 `GENERIC_ALL` 是等價的」也拿掉，見第 2 步；renderer 的 policy 和 machopo 的 CI 的留著）、`docs/testing.md`（mutation test 的原檔）。`docs/limitations.md` 確認過，不用改。
+- **跑過的檢查**：`cargo test --workspace`（5071 個通過、1 個 ignored，沒有失敗；`shell` 的 `renderer_sandbox_macos::` 和 `automation_pipe` 經過 ../third_party/sunaba）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（都通過）；`sanity.py` 的七項；`scripts/sanity_numerics_test.py`、`ci_patches_test.py`、`mutate_test.py`。Linux 和 Windows 的 `renderer_sandbox_*` 沒有在這裡跑：程式和 machopo 原本的 `crates/sunaba` 一樣（第 2 步確認過），Linux 的由 machopo 的 CI 跑，Windows 的等使用者的 Windows 機器。
+

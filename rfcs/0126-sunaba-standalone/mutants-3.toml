@@ -1,0 +1,47 @@
+# The originals of files outside the repo wait inside `target/mutate/originals/`
+# (`_outside/`), and `--restore` puts them back: `python3 scripts/test.py mutate
+# rfcs/0126-sunaba-standalone/mutants-3.toml --keep-going`.
+test = ["python3", "scripts/mutate_test.py"]
+timeout = 120
+
+[[mutant]]
+name = "an outside file's original waits outside the originals, as before"
+file = "scripts/test.py"
+from = '''            path = mutant_path(mutant.file)
+            original = path.read_bytes()
+            saved = saved_original(mutant.file)'''
+to = '''            path = mutant_path(mutant.file)
+            original = path.read_bytes()
+            saved = MUTATE_ORIGINALS / mutant.file'''
+
+[[mutant]]
+name = "an outside file's original isn't under _outside"
+file = "scripts/test.py"
+from = '''    return MUTATE_ORIGINALS / MUTATE_OUTSIDE / path.relative_to(ROOT.parent)'''
+to = '''    return MUTATE_ORIGINALS / path.relative_to(ROOT.parent)'''
+
+[[mutant]]
+name = "a spec's path keeps its .."
+file = "scripts/test.py"
+from = '''    return Path(os.path.normpath(ROOT / file))'''
+to = '''    return ROOT / file'''
+
+[[mutant]]
+name = "an original under _outside is put back in the repo"
+file = "scripts/test.py"
+from = '''    if rel.parts[0] == MUTATE_OUTSIDE:
+        return ROOT.parent.joinpath(*rel.parts[1:])'''
+to = '''    if rel.parts[0] == MUTATE_OUTSIDE:
+        return ROOT.joinpath(*rel.parts[1:])'''
+
+[[mutant]]
+name = "restore puts back by the saved path, as before"
+file = "scripts/test.py"
+from = '''        home = original_home(saved)'''
+to = '''        home = ROOT / saved.relative_to(MUTATE_ORIGINALS)'''
+
+[[mutant]]
+name = "a file beyond the repo's neighbours isn't refused"
+file = "scripts/test.py"
+from = '''        if not path.is_relative_to(ROOT.parent):'''
+to = '''        if False:'''

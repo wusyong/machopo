@@ -22,6 +22,7 @@ machopo builds against projects checked out next to it, in
     elise/          the DOM's GC (machopo's own project)
     parley/         our fork of parley (README.machopo.md)
     rusty_v8/       our fork of rusty_v8, its v8 submodule our fork of V8 (README.machopo.md)
+    sunaba/         the process's sandbox (machopo's own project; the renderer's policy is shell's)
     taffy/          our fork of taffy (README.machopo.md)
     vello/          our fork of vello (README.machopo.md)
     wasmtime/       our fork of wasmtime, with elise as a collector (README.machopo.md)

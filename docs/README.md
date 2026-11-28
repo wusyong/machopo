@@ -17,8 +17,7 @@
 | RFC 的 `progress.md` | 實作的進度：每一步的狀態、驗收（測了什麼、怎麼驗證）、做過的檢查（mutation test、手動確認、找到的 bug、不穩定的測試）、測試數字 | 設計理由、目前仍然成立的限制（寫在 `docs/limitations.md`） |
 | `rfcs/pre-rfcs/` | MVP 時期的規劃、各階段的設計和進度。2026-10-04 起凍結，不再更新內容（見它的 README）；它的路徑和測試指令是當時的樣子，`sanity.py docs` 不檢查，只剩壞掉的章節引用要修 | 任何新的東西 |
 | `crates/*/README.md` | 那個 crate 的 API、使用規則、怎麼修改、測試怎麼跑；各子系統怎麼運作也寫在這裡。`crates/shell/README.md` 另外放視窗裡的鍵盤和滑鼠操作 | 進度 |
-| `crates/bindings/soundness.md` | `bindings` 的安全論證（DOM 的 GC 的在 elise 的 `docs/`）：假設、不變式、找到的漏洞、mutation test、人工審查清單 | API 教學 |
-| `crates/sunaba/soundness.md` | `sunaba`（process 的 sandbox）的安全論證：保證什麼、信任誰、不保證什麼、每一處 `unsafe`、修改時要審查什麼（英文：這個 crate 照獨立的專案寫） | API（在它的 README）；renderer 的 policy |
+| `crates/bindings/soundness.md` | `bindings` 的安全論證（DOM 的 GC 的在 elise 的 `docs/`，process 的 sandbox 的在 sunaba 的 `docs/`）：假設、不變式、找到的漏洞、mutation test、人工審查清單 | API 教學 |
 | `crates/ipc/soundness.md` | `ipc` 的安全論證：要保證的性質、信任誰、對 kernel 的假設（每個平台）、不變式、每一處 `unsafe`、修改時要審查什麼 | API 和各部分怎麼運作（在它的 README） |
 | `../third_party/*/README.machopo.md` | 放在 machopo 旁邊、各自是 git repo 的第三方專案裡，上游的 fork（`machopo` 分支；`../third_party/wpt` 是上游本身、不改，沒有這個檔，見 `tests/wpt/README.md`）：上游和分支的起點、為什麼 fork、本地的修改（`machopo` 分支上的 commit；parley 和 taffy 的另外標明上游的狀態，每個也是 machopo 的 `patches/<名稱>/` 底下的 patch）、怎麼更新。用英文 | 設計理由（寫在對應的 RFC） |
 | repo 根目錄的 `README.md` | 入口，英文：這是什麼、從哪幾份文件讀起、怎麼放第三方的專案、怎麼 build 和跑、常用的測試指令、哪些部分用哪一種授權（條文在 `LICENSE-MIT`、`LICENSE-APACHE`） | 設計、細節（寫在各自的文件） |
@@ -90,7 +89,7 @@ RFC 的「分階段」裡的一步（或再細分的一段）做完時。那份 
 
 ## 其他會牽動文件的變更
 
-- **調整 Rust 版本**：`rust-toolchain.toml` 和 workspace 的 `rust-version` 一起調；elise 釘著同樣的版本，一起調（它的 compile-fail 預期輸出用 `TRYBUILD=overwrite` 重新產生，並檢查 diff）。釘住 toolchain，測的就是 `rust-version` 宣稱支援的版本（只寫 `rust-version`、實際用 rustup 預設的 nightly 編，最低版本就從來沒驗證過）；compile-fail 的預期輸出要確認每個檔案的錯誤種類和位置沒變，只有措辭和排版不同。
+- **調整 Rust 版本**：`rust-toolchain.toml` 和 workspace 的 `rust-version` 一起調；elise 和 sunaba 釘著同樣的版本，一起調（elise 的 compile-fail 預期輸出用 `TRYBUILD=overwrite` 重新產生，並檢查 diff；兩者各自的 `rust-toolchain.toml` 和 `rust-version` 也一起調，push、等它們的 CI 之後更新 `third_party.toml`）。釘住 toolchain，測的就是 `rust-version` 宣稱支援的版本（只寫 `rust-version`、實際用 rustup 預設的 nightly 編，最低版本就從來沒驗證過）；compile-fail 的預期輸出要確認每個檔案的錯誤種類和位置沒變，只有措辭和排版不同。
 - **升級 `v8` crate**：先把 `../third_party/rusty_v8` 的 `machopo` 分支 rebase 到新的版本（見它的 `README.machopo.md`），跑 `python scripts/ci.py v8` 在本機重編 V8、設 `RUSTY_V8_ARCHIVE` 測過，再照 `crates/bindings/soundness.md` 的「需要人工審查的地方」重新確認假設；最後在 fork 推新的 release tag，把 `.cargo/config.toml` 的 `RUSTY_V8_MIRROR_TAG` 換過去、拿掉 `third_party.toml` 的 `[rusty_v8]` 的 `rev`，跑 `python scripts/ci.py third-party` 確認 `../third_party/rusty_v8` 在同一個 tag。
 - **更新 parley、taffy 或 vello 的 fork**：在 `../third_party/parley`、`../third_party/taffy` 或 `../third_party/vello` 的 `machopo` 分支 commit 並 push，在同一次改動裡把 `third_party.toml` 的 `rev` 換成那個 commit（只改 `README.machopo.md` 的也一樣；rebase 到上游的新 commit 時連同 `upstream_rev`），用 `python3 scripts/ci.py patches <名稱>` 重新匯出 `patches/<名稱>/`，先 push fork 再 push machopo。別台機器的 `ci.py third-party` 只拿得到 push 過的 commit，也檢查 patch 和 `rev` 一致。fork 的 `README.machopo.md` 的「Local modifications」跟著改，連同上游的狀態。
 - **rusty_v8 的 fork 只改了 Rust**（`.rs`，和 `.md`、`.github/` 的 CI 設定）：不用發新的 release，在 `machopo` 分支 commit 並 push，把 `third_party.toml` 的 `[rusty_v8]` 的 `rev` 換成那個 commit，跑 `python scripts/ci.py third-party` 確認 tag 之後沒有改到 prebuilt 裡的東西。動到 C++、`Cargo.toml` 或 `v8` submodule 時照上一條發新的 release；release 之前可以先在本機 commit、`rev` 指過去，設 `RUSTY_V8_ARCHIVE` 連結本機編的 V8（`ci.py third-party` 這時不檢查 prebuilt），發 release 時換 tag、拿掉 `rev`。

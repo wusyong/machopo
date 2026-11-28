@@ -22,12 +22,15 @@ compositor = { path = "crates/compositor" }
 viz = { path = "crates/viz" }
 bindings = { path = "crates/bindings" }
 ipc = { path = "crates/ipc" }
-sunaba = { path = "crates/sunaba" }
 site = { path = "crates/site" }
 sql = { path = "crates/sql" }
 # The DOM's GC: machopo's own project (not a fork), next to the repo at the
 # commit `third_party.toml` pins; its docs are in ../third_party/elise/docs.
 elise = { path = "../third_party/elise/crates/elise" }
+# The process's sandbox: machopo's own project too, next to the repo at the
+# commit `third_party.toml` pins; its docs are in ../third_party/sunaba/docs.
+# The renderer's policy is `shell`'s (`renderer_sandbox`).
+sunaba = { path = "../third_party/sunaba" }
 dom = { path = "crates/dom" }
 dom_api = { path = "crates/dom_api" }
 dom_api_macros = { path = "crates/dom_api_macros" }
@@ -243,10 +246,9 @@ ctor = { version = "1", default-features = false, features = ["std"] }
 # Its Verus lemmas are imported under Verus's `cfg(verus_only)`.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ipc_loom)", "cfg(ipc_shuttle)", "cfg(verus_only)"] }
 unsafe_op_in_unsafe_fn = "deny"
-# `unsafe` is confined to `bindings` (V8 FFI), `sunaba` (the sandbox's signal
-# handler) and `ipc` (the channels' shared
+# `unsafe` is confined to `bindings` (V8 FFI) and `ipc` (the channels' shared
 # memory), which opt back in at their crate roots. Everything else builds on
-# their safe APIs, and on elise's, the GC's.
+# their safe APIs, and on elise's (the GC's) and sunaba's (the sandbox's).
 unsafe_code = "deny"
 
 [workspace.lints.clippy]

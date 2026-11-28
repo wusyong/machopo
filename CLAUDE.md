@@ -12,7 +12,7 @@
 - `rfcs/README.md` 和各份 RFC：MVP 之後的功能和設計；正在做的 RFC 的進度在它的 `progress.md`。
 - `rfcs/pre-rfcs/`：MVP 的規劃、各階段最後的設計和理由（包括試過、改掉的做法），2026-10-04 起凍結。找某個設計為什麼這樣做時讀它，不要再改它。
 - `docs/README.md`：每份文件放什麼、怎麼更新。**改文件前一定要讀**。
-- 動到 `bindings` 的 GC、`unsafe`、執行 script 的入口：先讀 `crates/bindings/soundness.md`。動到 `ipc` 的 `unsafe`、訊息的檢查或平台層：先讀 `crates/ipc/soundness.md`。動到 `sunaba`（process 的 sandbox）或 renderer 的 sandbox policy：先讀 `crates/sunaba/soundness.md`。動到 DOM 的 GC（elise，`../third_party/elise`）：先讀 `../third_party/elise/docs/soundness.md`、`../third_party/elise/docs/api.md` 和 `../third_party/elise/docs/contributing.md`。
+- 動到 `bindings` 的 GC、`unsafe`、執行 script 的入口：先讀 `crates/bindings/soundness.md`。動到 `ipc` 的 `unsafe`、訊息的檢查或平台層：先讀 `crates/ipc/soundness.md`。動到 process 的 sandbox（sunaba，`../third_party/sunaba`）或 renderer 的 sandbox policy（`shell` 的 `renderer_sandbox`）：先讀 `../third_party/sunaba/docs/soundness.md` 和 `../third_party/sunaba/docs/contributing.md`。動到 DOM 的 GC（elise，`../third_party/elise`）：先讀 `../third_party/elise/docs/soundness.md`、`../third_party/elise/docs/api.md` 和 `../third_party/elise/docs/contributing.md`。
 - 加新的繪圖功能（新的 `PaintOp`、filter、shader、blend mode），或動 `raster` 的 playback：先看 `docs/render-gaps.md`（raster 用的 Vello 缺什麼、現在補在哪）。
 - 加新的 CSS property、pseudo-class、會影響 style 的 DOM 狀態、box 畫的新輸入，或改 hit test、parse 的 fast path：先看 `docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」，漏改的多半是畫面不更新，不是 crash。
 - 加 renderer 的 main thread 要做的新工作（新的 timer、task、task 之後的步驟、DevTools 或 Browser 要當場知道的事），或改 `RenderThread::run`、`after_task`、scheduler：先看 `docs/architecture.md` 的「Event loop：加新的工作時要跟著改的地方」，漏改的多半是那件事不發生或晚發生，測試常常看不出來。
@@ -50,7 +50,7 @@
   python3 scripts/sanity.py deps              # V8 只在 bindings、dom_js
   python3 scripts/sanity.py spans             # span 用 trace_event 的 macro（沒開 trace 時不建）
   python3 scripts/sanity.py boundary          # renderer 守住 process 的邊界
-  python3 scripts/sanity.py unsafe            # unsafe 只在 bindings、ipc 和 sunaba
+  python3 scripts/sanity.py unsafe            # unsafe 只在 bindings 和 ipc
   python3 scripts/sanity.py tests             # 每個 crate 的整合測試是一個 binary（tests/it/）
   python3 scripts/sanity.py numerics          # 整數運算寫明溢位時怎麼辦（crates/base/README.md）
   python3 scripts/sanity.py docs              # 改了文件時
@@ -81,10 +81,10 @@
 - **擁有權和借用先設計好，不預設用 `Rc`、`RefCell`、`Arc`**：先想清楚誰擁有、借用能不能靜態地保證（從擁有者借、分開借欄位、綁在像 `&mut Isolate` 這樣的通行證上）。執行時的計數和借用檢查只在說得出理由時用（真的共享擁有、跨 thread、外部 API 的限制，例如 html5ever 的 `&self` sink、V8 的 finalizer），在註解寫明，而且不放在每次呼叫都會走到的路上。對照 Chromium：Blink 的 `StringImpl`、`RefCounted` 是 thread 自己的、計數不是 atomic 的。
 - **整數運算和轉型寫明溢位時怎麼辦**：照 `crates/base/README.md` 的規則（大小和配置 checked、CSS 和 layout 的值飽和或 clamp、ID 用 `SequenceNumber`、float 轉整數用 `base::numerics`），證明過不會溢位的寫帶理由的 `#[expect]`，不用 `#[allow]`；clippy 和 `sanity.py numerics` 檢查。
 - **Browser 的 process 收到不可信的輸入的地方寫明為什麼不 panic**：`browser`、`viz`、`net` 和 `protocol` 的 `viz.rs` 打開 clippy 的 `unwrap_used`、`expect_used`、`indexing_slicing`、`panic`、`unreachable`（renderer 的訊息、網路上的回應走到它們，那裡的 panic 結束所有的分頁）：能改寫成不 panic 的（`get`、壞訊息、poison 的鎖照拿）就改寫，改不了的寫帶理由的 `#[expect]`（理由寫不變式為什麼成立、輸入為什麼破不了），照 `crates/base/README.md` 的規則；新的處理不可信輸入的 crate 也打開。renderer 這一側不打開。
-- **`unsafe` 只在 `bindings`、`ipc` 和 `sunaba`**，每一處都有 `// SAFETY:` 說明，改了論證要更新那個 crate 的 soundness 文件（`bindings` 是 `crates/bindings/soundness.md`；`ipc` 是 `crates/ipc/soundness.md`；`sunaba` 是 `crates/sunaba/soundness.md`）。elise 的 `unsafe` 照它自己的規則，論證在 `../third_party/elise/docs/soundness.md`。
+- **`unsafe` 只在 `bindings` 和 `ipc`**，每一處都有 `// SAFETY:` 說明，改了論證要更新那個 crate 的 soundness 文件（`bindings` 是 `crates/bindings/soundness.md`；`ipc` 是 `crates/ipc/soundness.md`）。elise 和 sunaba 的 `unsafe` 照它們自己的規則，論證在 `../third_party/elise/docs/soundness.md` 和 `../third_party/sunaba/docs/soundness.md`。
 - **renderer 照 process 的邊界寫**：renderer 現在是 Browser process 裡的 thread，但之後要能拆成 process。改到 renderer 和 Browser、Viz 之間的東西（`protocol`、啟動 renderer 的參數、renderer 這一側的全域狀態）前，先看 `docs/architecture.md` 的「Process 的邊界」。
 - **V8 專屬的程式只在 `bindings` 和 `dom_js`**（量測用的 `gc_bench` 例外：它要量 V8 自己的 heap）；`dom_api` 和 renderer 與 engine 無關（`docs/architecture.md` 的「V8 和 `unsafe` 的位置」）。
-- Toolchain 釘在 `rust-toolchain.toml`，和 workspace 的 `rust-version` 一起改；elise 釘同樣的版本，一起改（它的 compile-fail 預期輸出要重新產生，並確認錯誤的種類沒變；`docs/README.md` 的「其他會牽動文件的變更」）。
+- Toolchain 釘在 `rust-toolchain.toml`，和 workspace 的 `rust-version` 一起改；elise 和 sunaba 釘同樣的版本，一起改（elise 的 compile-fail 預期輸出要重新產生，並確認錯誤的種類沒變；`docs/README.md` 的「其他會牽動文件的變更」）。
 
 ## 第三方的 fork
 
@@ -92,6 +92,7 @@
 - **parley、taffy 和 vello 緊跟上游的 main，上游優先**：fork 上每個 commit 只做一件事、帶 fork 自己的測試，寫成可以直接送上游的樣子，在 `README.machopo.md` 的「Local modifications」標明上游的狀態（只在 fork 的寫理由）。`README.machopo.md` 是最後一個、只改它的 commit。每個 commit 也是 machopo 的 `patches/<名稱>/` 底下的一個 patch：fork 每多一個 commit，在同一次改動裡更新 `third_party.toml` 的 `rev`（rebase 到上游的新 commit 時連同 `upstream_rev`），再用 `python3 scripts/ci.py patches <名稱>` 匯出；`ci.py third-party` 檢查 patch 套在 `upstream_rev` 上和 `rev` 一樣。rebase 之前在舊的頂端打 tag（`machopo-<日期>`），machopo 舊的 commit 釘的 rev 才拿得到。
 - **改 parley、taffy 或 vello 的 fork 時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」）和 machopo 相關的測試。升級 vello 時 `raster` 的 `upstream_*` 測試失敗，表示上游補上了缺的功能：照 `docs/render-gaps.md` 拿掉 playback 裡補的那一段。taffy 沒有釘 toolchain，用 machopo 的編；要送上游的修改守住 taffy 的 `rust-version`，送出前用那個版本確認。
 - `../third_party/elise` 是 DOM 的 GC，machopo 自己的專案（MIT OR Apache-2.0，wasmtime 的 fork 也用它），不是 fork，用 `main`：改 GC 在那裡改，照 `../third_party/elise/docs/contributing.md`，跑它的 `cargo test --workspace`、`scripts/sanity.py` 和改到的部分的 `scripts/test.py`（models、fuzz、verus、miri），GC 自己的測試的缺口記在它的 `docs/testing.md`。**它每多一個 commit 也在同一次改動裡更新 `third_party.toml`**（下面的規則），只釘推到它的 `main` 上的 commit（它的 CI 測過的）。
+- `../third_party/sunaba` 是 process 的 sandbox 的機制，machopo 自己的專案（MIT OR Apache-2.0），不是 fork，用 `main`：改機制在那裡改，照 `../third_party/sunaba/docs/contributing.md`，在改到的每個作業系統上跑它的 `cargo test`、clippy（帶和不帶預設的 feature）、`cargo fmt --check` 和 `scripts/sanity.py`，push 之後等它的 CI 在 Linux、macOS 和 Windows 上通過，測試的缺口記在它的 `docs/testing.md`。renderer 的 policy 照舊在 machopo 的 `shell`（`renderer_sandbox`）改，再跑 machopo 的 `renderer_sandbox_*` 和 `ipc` 的測試。**它每多一個 commit 也在同一次改動裡更新 `third_party.toml`**（同上），只釘它的 CI 測過的 `main` 上的 commit。弄壞它的 mutation test 照樣寫在 machopo 的 RFC 裡，用 `test.py mutate`（`file` 寫 `../third_party/sunaba` 底下的路徑，`test` 用 `cargo test --manifest-path ../third_party/sunaba/Cargo.toml`，或 machopo 自己的測試）。
 - **改 wasmtime 的 fork，或改 elise 的 `raw`（fork 接 elise 的那一層）時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」：`cargo test --features gc-elise --test all elise::`、`python3 machopo/elise_tests.py` 和 clippy）：machopo 的 `dom_wasm` 只用到其中一部分（借 DOM 的 heap 的 Store），上游的 GC 測試、spec test 和 fuzz 用 elise 跑的結果只有 fork 的測試看得到，machopo 的 CI 不跑它們。
 - `../third_party/wpt` 是上游的 WPT，不是 fork，測試直接讀它：**不要改它**。要跑哪些測試、預期結果、怎麼換 commit，都在 `tests/wpt/`（見它的 README）。
 - **改 fork 要盡量小**，程式裡用 `machopo:` 註解標出來，並記在那個 fork 的 `README.machopo.md`（「Local modifications」）。fork 要用它自己 `rust-toolchain.toml` 釘住的版本也能編（有釘的話）。

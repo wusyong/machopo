@@ -13,7 +13,7 @@
 - `Cargo.toml`：`description` 有；`version`、`edition`、`rust-version`、`publish`、`license` 都是 `.workspace = true`（0.0.1、2024、1.99、`publish = false`、`MIT OR Apache-2.0`）；`[lib] doctest = false`；`[lints] workspace = true`。依賴的版本都自己寫，不經過 workspace：Linux 的 `landlock 0.4.8`、`seccompiler 0.5.0`、`libc 0.2`，macOS 的 `libc 0.2`，Windows 的 `windows-sys 0.61`（自己的 feature 清單）。沒有 `repository`、`readme`、`keywords`，crate 裡沒有授權的檔案。
 - `build.rs`：只在 windows-msvc，讓 `sunaba_probe` 延後載入 `user32.dll`（加 `delayimp.lib`），只對它自己的 bin。
 - `lib.rs`：`#![allow(unsafe_code, reason = …)]`；測試裡打開整數運算的 lint（`cfg_attr(test)`）。
-- 提到 machopo 的地方：`build.rs` 的註解、`soundness.md` 的「What the tests check, and don't」的兩處（namespace 的 chroot 由 machopo 的測試看、延後載入失敗的 hook 由 machopo 的測試看）。
+- 提到 machopo 的地方：`build.rs` 的註解、`crates/sunaba/soundness.md` 的「What the tests check, and don't」的兩處（namespace 的 chroot 由 machopo 的測試看、延後載入失敗的 hook 由 machopo 的測試看）。
 
 ### 從 workspace 繼承、搬出去要自己寫的
 

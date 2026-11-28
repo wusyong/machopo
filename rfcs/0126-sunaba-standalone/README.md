@@ -91,7 +91,7 @@
 
 - `sunaba`：在新的 repo 的 CI 上，三個平台的 `cargo test`、clippy、fmt、`sanity.py` 都通過；本機在 Windows 上照新的 repo 的樣子單獨跑一次（不在 machopo 的 workspace 裡）。
 - machopo：`python3 scripts/ci.py third-party` 從空的 `../third_party` clone 得出 `sunaba`；`cargo test -p shell -p ipc -p browser` 和 `renderer_sandbox_*` 的測試通過；`sanity.py` 的七項通過；`cargo test --workspace`、fmt、clippy（搬完的階段）。
-- 程式不改，所以不用 mutation test；只確認 `test.py mutate` 的 spec 能不能指 ../third_party/sunaba 的檔案（之後改 `sunaba` 時要用；待決定的第 1 條）。
+- 程式不改，所以不用 mutation test；只確認 `test.py mutate` 的 spec 能不能指 ../third_party/sunaba 的檔案（之後改 `sunaba` 時要用；已決定的事項第 12 條）。
 
 ### 分階段
 
@@ -139,9 +139,13 @@
 10. **sunaba 的 repo 用 machopo 的 `main` 上的 default DACL 的修正**（2026-11-28 改寫）：sunaba 第一次的 CI 在 Windows 上看到 sandbox 裡的 process 的 default DACL 有 logon session；同一天 machopo 的 `main` 已經在 `crates/sunaba` 修好（fc17f43d，RFC 0121 的已決定的事項第 12 條：K2，照 Chromium 的 `SetLockdownDefaultDacl`），在 Windows 上用一般使用者跑過測試和 mutation test。sunaba 的 repo 照搬它（sunaba 的 7973001），不用第 2 段自己寫的那一版（sunaba 的 56f8237：建好 AppContainer 的 token 之後才改，第一個 thread 的 token 沒有測試）。程式和 machopo 的 `crates/sunaba` 一樣，所以不是這份 RFC 改了 sunaba 的行為。
 11. **chroot 之後查路徑的 errno 接受 `ESRCH` 或 `ENOENT`**：只改測試和文件。chroot 到已經結束的 thread 的 `/proc/thread-self/fdinfo`，查路徑失敗回哪一個看 kernel 的版本（開發機 `ESRCH`、runner `ENOENT`）；要守的是「每個路徑都一樣失敗」，Chromium 的同一個做法也不看 errno。
 
+2026-11-28，第 3 段開始前，使用者確認：
+
+12. **`test.py mutate` 把 machopo 以外的檔案的原檔存在 `target/mutate/originals/_outside/` 底下（M1）**：spec 的 `file` 寫 ../third_party/sunaba 底下的路徑、`test` 用 `--manifest-path` 本來就能跑（RFC 0094 弄壞 elise 時這樣做過），但原檔存在 `originals/` 加上 `file` 的位置，`../` 把它帶到 `originals/` 外面：跑到一半中斷時，「上一次沒跑完」的檢查和 `--restore` 都找不到它，`../third_party` 的檔案留著壞的。改成 machopo 以外的檔案存在 `originals/_outside/<相對於 machopo 的上一層的路徑>`，`--restore` 照那個路徑放回去；machopo 裡的檔案照舊。理由：改得少，elise 的也一起修好，改 `sunaba` 的 mutation test 照樣寫在 machopo 的 RFC 裡、可以用 machopo 的測試抓（例如 `renderer_sandbox_windows`）。不選只在文件寫明不要中斷（M2：漏洞還在）、`sunaba` 自己寫一份工具（M3：兩份要一起維護，跨 repo 的測試做不到）。
+
 ## 待決定
 
-1. `test.py mutate` 要不要支援 ../third_party 底下的檔案（elise 的 mutation test 現在怎麼跑，先查）：第 3 段之前。
+沒有。
 
 ## 之後的可能
 

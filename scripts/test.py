@@ -1430,6 +1430,34 @@ def cmd_wdspec(args: argparse.Namespace) -> int:
 # back: what `--restore` restores after a run that was killed.
 MUTATE_DIR = ROOT / "target" / "mutate"
 MUTATE_ORIGINALS = MUTATE_DIR / "originals"
+# Where the originals of files outside the repo wait (a spec may break one
+# of `../third_party/elise` or `../third_party/sunaba`, machopo's own
+# projects next to it): by their path from the repo's parent, under
+# `originals/` like the rest, so that `--restore` and the check for a run
+# that didn't finish find them.
+MUTATE_OUTSIDE = "_outside"
+
+
+def mutant_path(file: str) -> Path:
+    """The file a spec's `file` names, from the repo root, with its `..`
+    taken out (by the path's text, not where links lead)."""
+    return Path(os.path.normpath(ROOT / file))
+
+
+def saved_original(file: str) -> Path:
+    """Where the original of the file a spec's `file` names waits."""
+    path = mutant_path(file)
+    if path.is_relative_to(ROOT):
+        return MUTATE_ORIGINALS / path.relative_to(ROOT)
+    return MUTATE_ORIGINALS / MUTATE_OUTSIDE / path.relative_to(ROOT.parent)
+
+
+def original_home(saved: Path) -> Path:
+    """The file an original in `MUTATE_ORIGINALS` is of."""
+    rel = saved.relative_to(MUTATE_ORIGINALS)
+    if rel.parts[0] == MUTATE_OUTSIDE:
+        return ROOT.parent.joinpath(*rel.parts[1:])
+    return ROOT / rel
 
 
 @dataclass
@@ -1460,7 +1488,9 @@ def load_mutants(spec: Path) -> tuple[list[Mutant], float]:
             raise ValueError(f"{spec}: mutant {name!r} has no {', '.join(missing)}")
         if not (isinstance(test, list) and test and all(isinstance(a, str) for a in test)):
             raise ValueError(f"{spec}: mutant {name!r}: `test` is a command as a list of strings")
-        path = ROOT / m["file"]
+        path = mutant_path(m["file"])
+        if not path.is_relative_to(ROOT.parent):
+            raise ValueError(f"{spec}: mutant {name!r}: {m['file']} is outside the repo and the projects next to it")
         text = path.read_text(encoding="utf-8")
         count = text.count(m["from"])
         if count != 1:
@@ -1571,9 +1601,9 @@ def restore_originals() -> list[str]:
     put back."""
     restored = []
     for saved in sorted(p for p in MUTATE_ORIGINALS.rglob("*") if p.is_file()):
-        rel = saved.relative_to(MUTATE_ORIGINALS)
-        write_back(ROOT / rel, saved.read_bytes())
-        restored.append(rel.as_posix())
+        home = original_home(saved)
+        write_back(home, saved.read_bytes())
+        restored.append(Path(os.path.relpath(home, ROOT)).as_posix())
     shutil.rmtree(MUTATE_ORIGINALS)
     return restored
 
@@ -1800,7 +1830,9 @@ def cmd_mutate(args: argparse.Namespace) -> int:
     rest, unless `--keep-going`.
 
     The files are broken while it runs: don't stage or commit meanwhile.
-    Their originals wait in `target/mutate/originals/` until put back; a
+    Their originals wait in `target/mutate/originals/` until put back (a
+    file outside the repo, as `../third_party/sunaba/src/linux.rs`, in its
+    `_outside/`, by its path from the repo's parent); a
     run that was killed leaves them there, and the next refuses to start
     until `--restore` puts them back. Exits non-zero if a mutant was missed,
     didn't build, or the code as it is fails its tests."""
@@ -1841,9 +1873,9 @@ def cmd_mutate(args: argparse.Namespace) -> int:
     results = []
     try:
         for mutant in mutants:
-            path = ROOT / mutant.file
+            path = mutant_path(mutant.file)
             original = path.read_bytes()
-            saved = MUTATE_ORIGINALS / mutant.file
+            saved = saved_original(mutant.file)
             saved.parent.mkdir(parents=True, exist_ok=True)
             saved.write_bytes(original)
             try:

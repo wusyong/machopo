@@ -34,22 +34,20 @@ ROOT = Path(__file__).resolve().parent.parent
 # Where `#![allow(unsafe_code)]` may appear. The workspace denies
 # `unsafe_code`; only `bindings` (V8 FFI) and `ipc` (shared memory mapped
 # into two processes, and the Windows FFI) opt back in, at their crate roots,
-# plus their integration tests. The DOM's GC heap is elise's, next to the
-# repo, under its own rules.
+# plus their integration tests. The DOM's GC heap is elise's, and the
+# process's sandbox sunaba's, next to the repo, under their own rules.
 UNSAFE_ALLOWED = [
     "crates/bindings/src/lib.rs",
     "crates/ipc/src/lib.rs",
     "crates/bindings/tests/",
     "crates/ipc/tests/",
-    # The process's sandbox: a signal handler, and its tests' raw system calls.
-    "crates/sunaba/src/lib.rs",
 ]
 
 ALLOW_UNSAFE = re.compile(r"#!?\[\s*(?:allow|expect)\s*\([^\]]*\bunsafe_code\b", re.S)
 
 
 def cmd_unsafe(args: argparse.Namespace) -> int:
-    """`unsafe` stays in `bindings`, `ipc` and `gc`: the workspace denies it, every
+    """`unsafe` stays in `bindings` and `ipc`: the workspace denies it, every
     crate inherits the workspace lints, and only the allowed files opt out.
     The files that may allow `unsafe_code` are `UNSAFE_ALLOWED` in this
     script: those crates' roots and their integration tests."""
@@ -74,13 +72,13 @@ def cmd_unsafe(args: argparse.Namespace) -> int:
         for match in ALLOW_UNSAFE.finditer(text):
             if not any(rel == a or (a.endswith("/") and rel.startswith(a)) for a in UNSAFE_ALLOWED):
                 line = text.count("\n", 0, match.start()) + 1
-                problems.append(f"{rel}:{line}: allows unsafe_code outside bindings / ipc / sunaba")
+                problems.append(f"{rel}:{line}: allows unsafe_code outside bindings / ipc")
 
     for problem in problems:
         print(problem)
     if problems:
         return 1
-    print("unsafe is confined to bindings, ipc and sunaba")
+    print("unsafe is confined to bindings and ipc")
     return 0
 
 
@@ -853,14 +851,16 @@ def path_exists(token: str, doc: Path) -> bool:
 
 # The old DOM's crates, deleted once the DOM that replaced them was the
 # only one, and the crates renamed then (the DOM's took their names,
-# `style` became `style_resolver`): an RFC written before that cites their
+# `style` became `style_resolver`), and `sunaba`, moved out to a repository
+# of its own (../third_party/sunaba): an RFC written before that cites their
 # files, sections and tests as they were, so those aren't checked in
 # `rfcs/`.
 GONE_CRATES = (
     "dom", "dom_api", "dom_macros", "dom_js", "dom_wasm", "style",
     "dom_next", "dom_api_next", "dom_api_next_macros", "dom_js_next", "dom_wasm_next", "style_next",
+    "sunaba",
 )
-GONE_CRATE_PATH = re.compile(r"^(?:crates/)?(?:" + "|".join(GONE_CRATES) + r")/")
+GONE_CRATE_PATH = re.compile(r"^(?:crates/)?(?:" + "|".join(GONE_CRATES) + r")(?:/|$)")
 GONE_CRATE_TEST = re.compile(r"-p (?:" + "|".join(GONE_CRATES) + r")\b")
 
 
