@@ -16,7 +16,8 @@
 | N | 跨源的回應不交給不該拿的 renderer | ORB（Fetch 的 opaque response blocking：`no-cors` 的跨源回應照 MIME type 和內容的開頭擋掉 HTML、JSON、XML）；`Cross-Origin-Resource-Policy`；都在 network service 這一側（renderer 拿到的是擋過的） | M | — | `net`、`protocol` | M1 |
 | F1 | 不讓別人嵌：`X-Frame-Options` 和 CSP 的 `frame-ancestors` | Browser 在子 frame 的導覽 commit 之前檢查（Chromium 的 `AncestorThrottle`；`frame-ancestors` Chromium 在 renderer 檢查，machopo 兩個都放 Browser）；不准的顯示錯誤頁。完整的 CSP 不在這份 | S–M | — | `browser` 的導覽、`net` 的 header | M1 |
 | C：[RFC 0124](../0124-cross-site-process-swap/README.md)（2026-11-27 排程） | 跨網站的導覽換 process | Browser 的 `SiteInstance`、`BrowsingInstance`（先是一個分頁一個 group）；決定一次導覽要不要換 process（site 不同、錯誤頁、`about:blank` 和 `data:` 跟著發起者、`file:`）；在新的 process commit、舊的收掉（`pagehide`、`unload` 的時機）；session history、DevTools 的 session、WebDriver 的 session、automation 跨過換 process；renderer 啟動的時間（要不要先備一個） | L | — | `browser`（`web_contents`、`frame_tree`、`navigation_controller`、`render_process_host`）、`shell` 的 automation、`scripts/bench` | M2 |
-| B | process lock 和 Browser 的檢查 | process 在載入內容之前鎖到一個最上層的網站（`README.md` 的已決定的事項第 4 條）；每一種「要資料」的訊息照鎖檢查（commit 的 origin、loader 和 storage key 的最上層網站、cookie、blob URL 的 origin、導覽的發起者），不對的是壞訊息；請求的 `Origin`、`Sec-Fetch-Site` 由 Browser 決定；測試用的「被攻破的 renderer」 | S–M | C | `browser`、`net`、`protocol` | M2 |
+| B：[RFC 0127](../0127-process-lock/README.md)（2026-11-28 接受） | process lock 和 Browser 的檢查 | process 在載入內容之前鎖到一個最上層的網站（`README.md` 的已決定的事項第 4 條）；每一種「要資料」的訊息照鎖檢查（commit 的 origin、loader 和 storage key 的最上層網站、cookie、blob URL 的 origin、導覽的發起者），不對的是壞訊息；測試用的「被攻破的 renderer」。請求一定帶發起者移到 N、`Sec-Fetch-*` 移到 FM（RFC 0127 的已決定的事項第 4、5 條） | S–M | C | `browser`、`net`、`protocol` | M2 |
+| FM | Fetch Metadata：`Sec-Fetch-Site`、`Sec-Fetch-Mode`、`Sec-Fetch-Dest`、`Sec-Fetch-User` | Browser 這一側照請求的發起者、`mode`、`destination` 和使用者的啟動算（Chromium 的 `SetFetchMetadataHeaders`），導覽和子資源都送；renderer 送的 `sec-` header 已經擋了。WPT 的 `fetch/metadata/`。伺服器自願用來擋 CSRF 的訊號，不是 Browser 這一側的隔離，所以不在任何里程碑裡 | S–M | N（每個請求都帶發起者） | `net`、`browser` 的導覽 | — |
 | F2 | iframe 的 `sandbox` | sandbox 的旗標（opaque 的 origin、不跑 script、不開彈出視窗、不送表單、不導覽最上層……）、旗標跟著 frame 存在 Browser 的 frame 樹；CSP 的 `sandbox` 不在這份。要不要把 sandbox 的 frame 另外隔離等 OOPIF | M | — | `dom_api`、`renderer`、`browser` 的 frame 樹 | M3 |
 | W | `window.open` 和 `opener` | `window.open`、`opener`、具名的 browsing context、`noopener`；同一個 site 的彈出視窗和開它的頁面在同一個 process（同一個 `BrowsingInstance`）；跨網站的在別的 process、沒有 `opener`（要遠端的 window，等 O4）；`MessagePort` 的 pipe 跨 renderer；COOP（換 `BrowsingInstance`） | L | C（B 之後更好） | `dom_api`、`renderer`、`browser`、`shell` 的分頁 | M3 |
 | G | `Origin-Agent-Cluster` 和 `document.domain` | 照 Chrome 現在的做法（`README.md` 的已決定的事項第 3 條）：讀 `Origin-Agent-Cluster`，文件的 agent cluster 照 origin（預設）或照 site（`?0`），同一個 browsing context group 裡同一個 origin 的 keying 一致；`window.originAgentCluster`；`document.domain` 的 getter 和 setter（只在照 site 的 agent cluster 裡生效）；跨 window 的檢查照 same origin-domain（設過的文件不能再用照 origin 的 security token）。WPT 的 `html/browsers/origin/origin-keyed-agent-clusters/` | S–M | C（process 照 site 分了之後） | `dom_api`、`dom_js`、`bindings`、`renderer` | M3 |
@@ -32,7 +33,7 @@
 ### 每一份開始時要定的（先記下來）
 
 - **A**：wgpu 的錯誤怎麼對回是哪個 renderer 的 frame；Browser 的 panic 是逐一改掉，還是在訊息的入口接住（`catch_unwind`）當成壞訊息。
-- **N**：ORB 照規範的哪一版（Chromium 現在的 ORB 和規範的差別）；要 sniff 多少。
+- **N**：ORB 照規範的哪一版（Chromium 現在的 ORB 和規範的差別）；要 sniff 多少。另外一定要做（RFC 0127 的已決定的事項第 4 條）：renderer 的每個請求都帶發起者（現在 `no-cors` 的子資源不帶），不帶是壞訊息，CORS 照 `mode` 決定、不再看有沒有發起者；否則被攻破的 renderer 拿掉發起者就躲過 ORB。
 - **F1**：`frame-ancestors` 放 Browser 還是照 Chromium 放 renderer。
 - **C**：換不換 process 的規則（哪些導覽留在原來的 process）；同一個 site 的分頁共不共用 process；舊的文件的 `unload` 在哪裡跑、等不等；`beforeunload` 要不要在這份加；新的 renderer 要不要預先啟動；`--single-process` 和測試的 process 裡的分頁怎麼辦（不換）。
 - **B**：`about:blank`、`data:`、`blob:`、`srcdoc`、錯誤頁、`file:` 各自怎麼鎖；jail 之外要不要 citadel 的檢查。
@@ -53,7 +54,7 @@
 
 ```
 A ─┐
-N ─┼─ M1
+N ─┼─ M1      N ──► FM
 F1 ┘
 C ──► B ── M2
 C ──► W ─┐
