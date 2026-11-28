@@ -159,6 +159,6 @@ M1 和 M2 一定做，M4 做不做、什麼時候做，在 M2 做完、原型量
 ## 之後的可能
 
 - 鎖收到 origin（`--isolate-origins` 那一類）。
-- cross-origin isolated（COOP 加 COEP）和 `SharedArrayBuffer`。
+- cross-origin isolated（COOP 加 COEP）和 `SharedArrayBuffer`：2026-11-28 排進 `roadmap.md`，代號 X，放在 M3。
 - process 的上限和重用（同一個 site 的 process 跨分頁共用）。
 - GPU process、network service 的 process。
