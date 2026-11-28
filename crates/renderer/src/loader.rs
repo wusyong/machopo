@@ -113,17 +113,20 @@ impl BlobUrls {
     }
 
     /// Registers `url` for a blob of `mime_type` and `bytes`, which frame
-    /// `owner`'s realm made: the browser hears now, before any load of it.
+    /// `owner`'s realm made, through its document's `loader`: the browser
+    /// hears now, before any load of it.
     pub(crate) fn register(
         &self,
         url: &str,
         owner: FrameId,
+        loader: u64,
         mime_type: &str,
         bytes: std::sync::Arc<[u8]>,
     ) {
         self.state.borrow_mut().live.insert(url.to_owned(), owner);
         let _ = self.to_browser.send(RendererHostMsg::RegisterBlobUrl {
             worker: None,
+            loader,
             url: url.to_owned(),
             mime_type: mime_type.to_owned(),
             bytes: bytes.into(),
@@ -462,25 +465,26 @@ mod tests {
         let (to_browser, from_renderer) = crossbeam_channel::unbounded();
         let urls = BlobUrls::new(to_browser.into());
         let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(&b"hi"[..]);
-        urls.register("blob:null/1", FrameId(1), "a/b", bytes.clone());
-        urls.register("blob:null/2", FrameId(2), "a/b", bytes.clone());
-        let registered: Vec<(String, String, Vec<u8>)> = from_renderer
+        urls.register("blob:null/1", FrameId(1), 3, "a/b", bytes.clone());
+        urls.register("blob:null/2", FrameId(2), 4, "a/b", bytes.clone());
+        let registered: Vec<(u64, String, String, Vec<u8>)> = from_renderer
             .try_iter()
             .map(|msg| match msg {
                 RendererHostMsg::RegisterBlobUrl {
                     worker: None,
+                    loader,
                     url,
                     mime_type,
                     bytes,
-                } => (url, mime_type, bytes.to_vec()),
+                } => (loader, url, mime_type, bytes.to_vec()),
                 other => panic!("{other:?}"),
             })
             .collect();
         assert_eq!(
             registered,
             [
-                ("blob:null/1".into(), "a/b".into(), b"hi".to_vec()),
-                ("blob:null/2".into(), "a/b".into(), b"hi".to_vec()),
+                (3, "blob:null/1".into(), "a/b".into(), b"hi".to_vec()),
+                (4, "blob:null/2".into(), "a/b".into(), b"hi".to_vec()),
             ]
         );
         let first: url::Url = "blob:null/1#x".parse().unwrap();
@@ -500,8 +504,8 @@ mod tests {
                 .collect()
         };
         assert_eq!(revoked(&from_renderer), ["blob:null/1"]);
-        urls.register("blob:null/3", FrameId(1), "a/b", bytes.clone());
-        urls.register("blob:null/4", FrameId(3), "a/b", bytes);
+        urls.register("blob:null/3", FrameId(1), 3, "a/b", bytes.clone());
+        urls.register("blob:null/4", FrameId(3), 5, "a/b", bytes);
         let _ = from_renderer.try_iter().count();
         urls.revoke_frame(FrameId(3));
         urls.flush_revoked();

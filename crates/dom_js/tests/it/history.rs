@@ -24,10 +24,28 @@ impl Page {
     }
 
     pub(crate) fn new(url: &str) -> Self {
+        Self::with_loader(url, None)
+    }
+
+    /// [`new`](Self::new), its document given `loader` as the browser
+    /// gives the documents it commits theirs (what its blob URLs and
+    /// cookies go through); none: as `new`.
+    pub(crate) fn with_loader(url: &str, loader: Option<u64>) -> Self {
         let mut engine = crate::TestEngine::new(EngineSettings { web_tests: true });
         let document = engine
             .create_window(engine.top_frame(), url, Instant::now())
             .expect("a window");
+        if let Some(loader) = loader {
+            engine.dom_mut().mutate(|cx| {
+                cx.set_document_loader(
+                    document.get(cx.gc),
+                    dom::DocumentLoader {
+                        loader,
+                        navigation: None,
+                    },
+                );
+            });
+        }
         drop(document);
         let mut page = Self::of(engine);
         page.eval("document.appendChild(document.createElement('html')).appendChild(document.createElement('body')); 0");

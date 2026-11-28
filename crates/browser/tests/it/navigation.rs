@@ -241,7 +241,7 @@ pub(crate) fn tab_with_renderer_flags(
 /// redirect or end, which the tab follows or commits (as the embedder
 /// hands it over), and for a message of a renderer the tab ended or
 /// replaced, which counts for nothing.
-fn renderer_message(
+pub(crate) fn renderer_message(
     web_contents: &mut WebContents,
     event: ContentsEvent,
 ) -> Option<RendererHostMsg> {
@@ -1315,8 +1315,10 @@ fn losing_the_gpu_drops_the_renderers_shared_images() {
 #[test]
 fn a_link_to_a_new_tab_is_handed_to_the_embedder() {
     let (mut web_contents, _host_rx, _viz_rx, _begin_frames) = tab_with_viz();
+    let main = web_contents.devtools_frame_token();
     let open = |web_contents: &mut WebContents, url: &str, disposition| {
         web_contents.on_renderer_message(&RendererHostMsg::OpenUrl {
+            initiator: main,
             url: url.into(),
             disposition,
         });
@@ -1342,17 +1344,22 @@ fn a_link_to_a_new_tab_is_handed_to_the_embedder() {
         WindowOpenDisposition::NewForegroundTab,
     );
     assert_eq!(web_contents.latest_navigation_id(), 0, "not here");
+    let opened: Vec<(String, WindowOpenDisposition)> = web_contents
+        .take_opened()
+        .into_iter()
+        .map(|params: OpenUrlParams| (params.url, params.disposition))
+        .collect();
     assert_eq!(
-        web_contents.take_opened(),
+        opened,
         [
-            OpenUrlParams {
-                url: "https://a.test/".into(),
-                disposition: WindowOpenDisposition::NewBackgroundTab,
-            },
-            OpenUrlParams {
-                url: "https://b.test/".into(),
-                disposition: WindowOpenDisposition::NewForegroundTab,
-            },
+            (
+                "https://a.test/".into(),
+                WindowOpenDisposition::NewBackgroundTab
+            ),
+            (
+                "https://b.test/".into(),
+                WindowOpenDisposition::NewForegroundTab
+            ),
         ]
     );
     assert_eq!(web_contents.take_opened(), []);
@@ -1383,6 +1390,7 @@ fn a_page_may_not_navigate_to_a_data_url() {
     let (mut web_contents, _host_rx, _viz_rx, _begin_frames) = tab_with_viz();
     page_navigates(&mut web_contents, "data:text/html,x");
     web_contents.on_renderer_message(&RendererHostMsg::OpenUrl {
+        initiator: web_contents.devtools_frame_token(),
         url: "data:text/html,x".into(),
         disposition: WindowOpenDisposition::NewForegroundTab,
     });
@@ -4617,9 +4625,9 @@ document.querySelector('base').setAttribute('href', '/later/');
         let mut child = made(&mut web_contents);
         wait_until_loaded(&mut web_contents, &host_rx);
         // A parent not there, a token in use, a frame not there gone, the
-        // main frame gone, a navigation of or by a frame not there: each to
-        // the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 15] = [
+        // main frame gone, a navigation of or by a frame not there, a new
+        // tab by one: each to the renderer of the time.
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 16] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
@@ -4654,6 +4662,12 @@ document.querySelector('base').setAttribute('href', '/later/');
                 devtools_initiator: None,
                 history_in_new_child_frame: false,
                 load_flags: Default::default(),
+            },
+            // A new tab asked by a frame not there.
+            |_, _| RendererHostMsg::OpenUrl {
+                initiator: protocol::FrameToken([0xEE; 16]),
+                url: "https://a.test/".into(),
+                disposition: WindowOpenDisposition::NewForegroundTab,
             },
             // A commit in a frame not there.
             |_, _| RendererHostMsg::DidCommitNavigation {

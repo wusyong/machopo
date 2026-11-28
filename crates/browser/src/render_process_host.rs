@@ -307,6 +307,44 @@ fn check_cookie_access(
     Ok((url, params.trusted.clone()))
 }
 
+/// Whether the renderer may register blob URL `url` through `loader`
+/// (worker `worker`'s, if a worker's): of a loader it was given, the
+/// worker's for a worker's, a `blob:` URL of the loader's origin or of an
+/// opaque one (`BlobURLStoreImpl::BlobUrlIsValid`, the store bound to its
+/// frame's origin). An opaque one is any loader's: a `javascript:` URL's
+/// document, a worker of a `data:` URL, have their creator's loader, and a
+/// document of an opaque origin gets no one's data. `Ok(false)`: a worker
+/// the renderer has no more, which registers nothing, without blame.
+fn check_blob_url(
+    loaders: &Loaders,
+    workers: &HashMap<u64, Worker>,
+    worker: Option<u64>,
+    loader: u64,
+    url: &str,
+) -> Result<bool, BadMessageReason> {
+    if let Some(worker) = worker {
+        let Some(known) = workers.get(&worker) else {
+            return Ok(false);
+        };
+        if known.loader != loader {
+            return Err(BadMessageReason::WorkerLoaderMismatch);
+        }
+    }
+    let params = loaders
+        .params
+        .get(&loader)
+        .ok_or(BadMessageReason::UnknownLoader)?;
+    let url = url::Url::parse(url).map_err(|_| BadMessageReason::BlobUrlOriginMismatch)?;
+    if url.scheme() != "blob" {
+        return Err(BadMessageReason::BlobUrlOriginMismatch);
+    }
+    match url.origin() {
+        url::Origin::Opaque(_) => Ok(true),
+        origin if origin == params.origin => Ok(true),
+        url::Origin::Tuple(..) => Err(BadMessageReason::BlobUrlOriginMismatch),
+    }
+}
+
 /// Called on a renderer's IO thread with each message it sends the UI
 /// thread, by the renderer's id; or with what makes one bad (`Err`).
 pub type RendererMessageCallback =
@@ -695,13 +733,6 @@ impl RenderProcessHost {
         move |mailbox| {
             let _ = to_compositor.send(CompositorMsg::SharedImagePixelsReturned { mailbox });
         }
-    }
-
-    /// Whether the renderer may ask for `url`, to load or to navigate a new
-    /// tab to (`ChildProcessSecurityPolicy::CanRequestURL`): a local file
-    /// only while one of its frames shows one.
-    pub(crate) fn can_request(&self, url: &str) -> bool {
-        !is_file_url(url) || self.file_access.load(Ordering::Relaxed)
     }
 
     /// Whether the renderer may read local files: while it shows one
@@ -1338,30 +1369,37 @@ impl IoThreadHost {
             // with the loads by an associated interface).
             RendererHostMsg::RegisterBlobUrl {
                 worker,
+                loader,
                 url,
                 mime_type,
                 bytes,
-            } => match worker {
-                None => {
-                    self.network.register_blob_url(
-                        self.renderer_id,
-                        &url,
-                        mime_type,
-                        bytes.into_bytes(),
-                    );
+            } => {
+                let checked = check_blob_url(
+                    &self.loaders.lock().unwrap_or_else(PoisonError::into_inner),
+                    &self.workers,
+                    worker,
+                    loader,
+                    &url,
+                );
+                match checked {
+                    // A worker gone: nothing.
+                    Ok(false) => {}
+                    Ok(true) => {
+                        let registered = self.network.register_blob_url(
+                            self.renderer_id,
+                            &url,
+                            mime_type,
+                            bytes.into_bytes(),
+                        );
+                        if registered.is_err() {
+                            (self.forward)(Err(BadMessageReason::BlobUrlTaken));
+                        } else if let Some(worker) = worker {
+                            self.worker_blob_urls.entry(worker).or_default().push(url);
+                        }
+                    }
+                    Err(reason) => (self.forward)(Err(reason)),
                 }
-                // One it didn't make, or gone: nothing.
-                Some(worker) if self.workers.contains_key(&worker) => {
-                    self.network.register_blob_url(
-                        self.renderer_id,
-                        &url,
-                        mime_type,
-                        bytes.into_bytes(),
-                    );
-                    self.worker_blob_urls.entry(worker).or_default().push(url);
-                }
-                Some(_) => {}
-            },
+            }
             // For loads here; the UI thread forgets it after
             // the navigations asked for before.
             RendererHostMsg::RevokeBlobUrl { url } => {
@@ -1733,8 +1771,13 @@ mod tests {
     }
 
     fn register_blob(worker: Option<u64>, url: &str) -> RendererHostMsg {
+        register_blob_through(worker, 1, url)
+    }
+
+    fn register_blob_through(worker: Option<u64>, loader: u64, url: &str) -> RendererHostMsg {
         RendererHostMsg::RegisterBlobUrl {
             worker,
+            loader,
             url: url.to_owned(),
             mime_type: "text/plain".to_owned(),
             bytes: b"blob".into(),
@@ -1832,6 +1875,91 @@ mod tests {
             forwarded.try_recv(),
             Ok(Ok(RendererHostMsg::RendererGone))
         ));
+        assert!(forwarded.try_recv().is_err());
+    }
+
+    /// A blob URL is registered through a loader the renderer was given,
+    /// the worker's for a worker's, and is of the loader's origin or an
+    /// opaque one: a loader of an opaque origin registers only an opaque
+    /// one. Another renderer's URL isn't taken, revoked or not; its own is
+    /// taken again. Each refused is bad, and registers nothing.
+    #[test]
+    fn a_blob_url_is_of_its_loaders_origin_and_no_one_elses() {
+        let (mut host, forwarded, _renderer) = io_thread_host();
+        let refused = |host: &mut IoThreadHost, msg: RendererHostMsg| {
+            host.on_message(msg);
+            forwarded.try_recv().ok().and_then(Result::err)
+        };
+        assert_eq!(
+            refused(&mut host, register_blob(None, "blob:https://a.example/a")),
+            None
+        );
+        assert!(blob_loads(&host, "blob:https://a.example/a"));
+        assert_eq!(refused(&mut host, register_blob(None, "blob:null/a")), None);
+        assert!(blob_loads(&host, "blob:null/a"));
+        assert_eq!(
+            refused(&mut host, register_blob_through(None, 2, "blob:null/b")),
+            None,
+            "an opaque loader's"
+        );
+        for (loader, url) in [
+            (1, "blob:https://b.example/b"),
+            (1, "blob:http://a.example/b"),
+            (1, "https://a.example/b"),
+            (1, "not a URL"),
+            (2, "blob:https://a.example/b"),
+        ] {
+            assert_eq!(
+                refused(&mut host, register_blob_through(None, loader, url)),
+                Some(BadMessageReason::BlobUrlOriginMismatch),
+                "{url} through {loader}"
+            );
+            assert!(!blob_loads(&host, url), "{url}");
+        }
+        assert_eq!(
+            refused(
+                &mut host,
+                register_blob_through(None, 9, "blob:https://a.example/c")
+            ),
+            Some(BadMessageReason::UnknownLoader)
+        );
+        let script = ResourceRequest::new("data:text/javascript,1", RequestDestination::Worker);
+        host.on_message(RendererHostMsg::DedicatedWorkerCreated {
+            worker: 1,
+            loader: 1,
+            request: script,
+        });
+        assert_eq!(
+            refused(&mut host, register_blob_through(Some(1), 2, "blob:null/w")),
+            Some(BadMessageReason::WorkerLoaderMismatch)
+        );
+
+        let theirs = host.renderer_id.saturating_add(1);
+        for url in [
+            "blob:https://a.example/theirs",
+            "blob:https://a.example/revoked",
+        ] {
+            host.network
+                .register_blob_url(theirs, url, "text/plain".to_owned(), b"theirs"[..].into())
+                .unwrap();
+        }
+        host.network
+            .revoke_blob_url(theirs, "blob:https://a.example/revoked");
+        for url in [
+            "blob:https://a.example/theirs",
+            "blob:https://a.example/revoked#f",
+        ] {
+            assert_eq!(
+                refused(&mut host, register_blob(None, url)),
+                Some(BadMessageReason::BlobUrlTaken),
+                "{url}"
+            );
+            assert!(!blob_loads(&host, url), "{url}");
+        }
+        assert_eq!(
+            refused(&mut host, register_blob(None, "blob:https://a.example/a")),
+            None
+        );
         assert!(forwarded.try_recv().is_err());
     }
 

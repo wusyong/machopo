@@ -12,8 +12,8 @@ use ipc::core::frame::BadMessage;
 use ipc::endpoint::{self, Handler, IoLoop, Received};
 use ipc::platform::Channel;
 use net::test_server::Route;
-use protocol::control_channel::{ChannelLink, config, to_browser};
-use protocol::renderer::RendererHostMsg;
+use protocol::control_channel::{ChannelLink, config, to_browser, to_renderer};
+use protocol::renderer::{RendererHostMsg, RendererMsg};
 use protocol::viz::{CompositorFrameSinkMsg, VizMsg};
 
 use crate::navigation::{
@@ -52,6 +52,28 @@ fn child() {
             };
             let _ = link.send(to_browser::HOST, &cookie);
         }),
+        // Once the browser gave its page's document a loader: a blob URL of
+        // another site, which that document would be of; one of the page's
+        // origin that another renderer has (`TAKEN_BLOB_URL`).
+        Some(role @ ("another site's blob URL" | "another renderer's blob URL")) => {
+            let another_site = role == "another site's blob URL";
+            rogue_on_commit(move |link, loader, url| {
+                let origin = url::Url::parse(url).expect("a page's URL").origin();
+                let url = if another_site {
+                    "blob:https://elsewhere.test/x".to_owned()
+                } else {
+                    format!("blob:{}/{TAKEN_BLOB_URL}", origin.ascii_serialization())
+                };
+                let msg = RendererHostMsg::RegisterBlobUrl {
+                    worker: None,
+                    loader,
+                    url,
+                    mime_type: "text/html".into(),
+                    bytes: b"<script>steal()</script>".into(),
+                };
+                let _ = link.send(to_browser::HOST, &msg);
+            })
+        }
         // What Viz would be handed, as its compositor sends it: one that
         // can't be right, and one that can.
         Some(
@@ -104,6 +126,39 @@ fn rogue(send: impl FnOnce(&ChannelLink)) -> ! {
     io_handle.serve(endpoint, Deaf);
     std::thread::spawn(move || io.run());
     send(&link);
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+/// The path of the blob URL of the page's origin that another renderer
+/// registered, for the role that takes it.
+const TAKEN_BLOB_URL: &str = "taken";
+
+/// [`rogue`], that sends what `send` does once the browser commits a
+/// document in it: with the document's loader and URL, as a renderer that
+/// was taken over has them.
+fn rogue_on_commit(send: impl Fn(&ChannelLink, u64, &str) + Send + 'static) -> ! {
+    struct OnCommit<F> {
+        link: ChannelLink,
+        send: F,
+    }
+    impl<F: Fn(&ChannelLink, u64, &str)> Handler<Channel> for OnCommit<F> {
+        fn message(&mut self, mut received: Received<'_, Channel>) -> Result<(), BadMessage> {
+            if received.destination() == to_renderer::MAIN
+                && let Ok(RendererMsg::CommitNavigation { loader, url, .. }) =
+                    received.decode::<RendererMsg>()
+            {
+                (self.send)(&self.link, loader, &url);
+            }
+            Ok(())
+        }
+    }
+    let channel = ipc::platform::inherited().expect("its end of the channel");
+    let (link, endpoint) = endpoint::endpoint(channel, config(false));
+    let (io, io_handle) = IoLoop::new().expect("a way to wait");
+    io_handle.serve(endpoint, OnCommit { link, send });
+    std::thread::spawn(move || io.run());
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
     }
@@ -768,6 +823,78 @@ fn a_process_that_sends_what_no_renderer_does_is_killed() {
         assert_eq!(ended_by(&web_contents), Some(KILLED), "{role}");
         assert_eq!(state_of(pid), None, "{role}: still there");
         assert_eq!(web_contents.renderer_pid(), None, "{role}");
+        web_contents.shutdown();
+    }
+}
+
+/// A renderer taken over has its document's loader: a blob URL of another
+/// site through it, which a document of that site would take for its own,
+/// is bad, and so is one another renderer has; each ends it, its URL
+/// registered for no navigation.
+#[cfg(unix)]
+#[test]
+fn a_renderer_registers_no_blob_url_but_its_documents_own() {
+    let server = crate::navigation::server(&[("/", Route::ok("text/html", "page"))]);
+    let origin = url::Url::parse(&server.url("/")).unwrap().origin();
+    let taken = format!("blob:{}/{TAKEN_BLOB_URL}", origin.ascii_serialization());
+    for (role, reason, url) in [
+        (
+            "another site's blob URL",
+            browser::BadMessageReason::BlobUrlOriginMismatch,
+            "blob:https://elsewhere.test/x".to_owned(),
+        ),
+        (
+            "another renderer's blob URL",
+            browser::BadMessageReason::BlobUrlTaken,
+            taken.clone(),
+        ),
+    ] {
+        let partition = in_memory();
+        partition
+            .network()
+            .register_blob_url(u64::MAX, &taken, "text/plain".into(), b"theirs"[..].into())
+            .unwrap();
+        let (mut web_contents, host_rx) = tab_launched(
+            launching(role),
+            false,
+            gfx::SystemColors::DEFAULT,
+            partition.clone(),
+        );
+        web_contents.navigate(server.url("/"));
+        // The navigation's events handled as they come, till it commits.
+        let bad = loop {
+            match host_rx.recv_timeout(TIMEOUT).expect("the tab hears") {
+                browser::ContentsEvent::BadMessage { reason, .. } => {
+                    web_contents.received_bad_message(reason);
+                    break reason;
+                }
+                event => {
+                    if let Some(msg) = crate::navigation::renderer_message(&mut web_contents, event)
+                    {
+                        web_contents.on_renderer_message(&msg);
+                    }
+                }
+            }
+        };
+        assert_eq!(bad, reason, "{role}");
+        assert!(web_contents.is_crashed(), "{role}");
+        assert_eq!(ended_by(&web_contents), Some(KILLED), "{role}");
+        let navigation = protocol::network::ResourceRequest::new(
+            url.clone(),
+            protocol::network::RequestDestination::Document,
+        );
+        let body = partition
+            .network()
+            .load_blob_url(&navigation, None)
+            .map(|response| response.body.to_vec());
+        match role {
+            "another site's blob URL" => assert!(body.is_err(), "{role}: {url}"),
+            _ => assert_eq!(
+                body.ok().as_deref(),
+                Some(&b"theirs"[..]),
+                "{role}: still theirs"
+            ),
+        }
         web_contents.shutdown();
     }
 }

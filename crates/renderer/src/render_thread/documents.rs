@@ -880,9 +880,19 @@ impl RenderThread {
             }
             for request in requests {
                 match request {
-                    FrameRequest::RegisterBlobUrl { frame, url, data } => {
-                        self.blob_urls
-                            .register(&url, frame, data.type_(), data.shared_bytes());
+                    FrameRequest::RegisterBlobUrl {
+                        frame,
+                        loader,
+                        url,
+                        data,
+                    } => {
+                        self.blob_urls.register(
+                            &url,
+                            frame,
+                            loader,
+                            data.type_(),
+                            data.shared_bytes(),
+                        );
                     }
                     FrameRequest::RevokeBlobUrl { url } => self.blob_urls.revoke(&url),
                 }
@@ -3595,14 +3605,20 @@ impl dom_api::FrameClient for RendererFrameClient {
                 }
                 return None;
             }
-            // Whichever frame's link: the browser opens the tab.
+            // Whichever frame's link: the browser opens the tab, as the
+            // frame whose link it is asked.
             FrameNavigation::NewTab { url, background } => {
                 let disposition = if *background {
                     protocol::renderer::WindowOpenDisposition::NewBackgroundTab
                 } else {
                     protocol::renderer::WindowOpenDisposition::NewForegroundTab
                 };
+                let Some(initiator) = asked.initiator else {
+                    tracing::warn!(url, "a new tab a frame the browser doesn't know asked for");
+                    return None;
+                };
                 let _ = self.to_browser.send(RendererHostMsg::OpenUrl {
+                    initiator,
                     url: url.clone(),
                     disposition,
                 });
@@ -4002,9 +4018,9 @@ impl dom_api::LoadSink for RendererLoadSink {
         Some(request_id)
     }
 
-    fn register_blob_url(&self, frame: FrameId, url: &str, data: &dom::BlobData) {
+    fn register_blob_url(&self, frame: FrameId, loader: u64, url: &str, data: &dom::BlobData) {
         self.blob_urls
-            .register(url, frame, data.type_(), data.shared_bytes());
+            .register(url, frame, loader, data.type_(), data.shared_bytes());
     }
 
     fn revoke_blob_url(&self, url: &str) {

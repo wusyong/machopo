@@ -1,0 +1,142 @@
+# Stage 1's mutants (what the renderer says for itself: blob URLs by their loader, a new tab's initiator): `python3 scripts/test.py mutate rfcs/0127-process-lock/mutants-1.toml`.
+test = ["sh", "-c", "cargo test -q -p browser --lib render_process_host && cargo test -q -p net --lib blob"]
+timeout = 1200
+
+[[mutant]]
+name = "a blob URL of any origin is taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        origin if origin == params.origin => Ok(true),
+        url::Origin::Tuple(..) => Err(BadMessageReason::BlobUrlOriginMismatch),'''
+to = '''        _ => Ok(true),'''
+
+[[mutant]]
+name = "an opaque blob URL is refused"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        url::Origin::Opaque(_) => Ok(true),
+        origin if origin == params.origin => Ok(true),'''
+to = '''        url::Origin::Opaque(_) => Err(BadMessageReason::BlobUrlOriginMismatch),
+        origin if origin == params.origin => Ok(true),'''
+
+[[mutant]]
+name = "any URL is a blob URL"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    if url.scheme() != "blob" {
+        return Err(BadMessageReason::BlobUrlOriginMismatch);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a blob URL through a loader not given is taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    let params = loaders
+        .params
+        .get(&loader)
+        .ok_or(BadMessageReason::UnknownLoader)?;
+    let url = url::Url::parse(url).map_err(|_| BadMessageReason::BlobUrlOriginMismatch)?;'''
+to = '''    let Some(params) = loaders.params.get(&loader) else {
+        return Ok(true);
+    };
+    let url = url::Url::parse(url).map_err(|_| BadMessageReason::BlobUrlOriginMismatch)?;'''
+
+[[mutant]]
+name = "a worker's blob URL through another loader is taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        if known.loader != loader {
+            return Err(BadMessageReason::WorkerLoaderMismatch);
+        }
+    }
+    let params = loaders'''
+to = '''    }
+    let params = loaders'''
+
+[[mutant]]
+name = "a blob URL refused registers all the same"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                    Err(reason) => (self.forward)(Err(reason)),
+                }
+            }
+            // For loads here; the UI thread forgets it after'''
+to = '''                    Err(reason) => {
+                        let _ = self.network.register_blob_url(
+                            self.renderer_id,
+                            &url,
+                            mime_type,
+                            bytes.into_bytes(),
+                        );
+                        (self.forward)(Err(reason));
+                    }
+                }
+            }
+            // For loads here; the UI thread forgets it after'''
+
+[[mutant]]
+name = "another renderer's blob URL is taken"
+file = "crates/net/src/blob.rs"
+from = '''        if entries.get(&key).is_some_and(|entry| entry.owner != owner) {
+            return Err(BlobUrlTaken);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a renderer's own blob URL isn't taken again"
+file = "crates/net/src/blob.rs"
+from = '''        if entries.get(&key).is_some_and(|entry| entry.owner != owner) {'''
+to = '''        if entries.contains_key(&key) {'''
+
+[[mutant]]
+name = "a blob URL taken is no bad message"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        if registered.is_err() {
+                            (self.forward)(Err(BadMessageReason::BlobUrlTaken));
+                        } else if let Some(worker) = worker {'''
+to = '''                        if let (Ok(()), Some(worker)) = (registered, worker) {'''
+
+[[mutant]]
+name = "the renderer sends no loader with a blob URL"
+file = "crates/dom_js/src/frames.rs"
+from = '''        Some(sink) => sink.register_blob_url(frame, loader, url, data),'''
+to = '''        Some(sink) => sink.register_blob_url(frame, 0, url, data),'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- documents::blob_urls_load_until_revoked"]
+
+[[mutant]]
+name = "a new tab's navigation is the browser's own"
+file = "crates/browser/src/web_contents.rs"
+from = '''            Asked {
+                opener: Some(params.initiator.clone()),
+                ..Asked::default()
+            },'''
+to = '''            Asked::default(),'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- cookies::a_new_tabs_navigation"]
+
+[[mutant]]
+name = "a new tab's request has no initiator"
+file = "crates/browser/src/web_contents.rs"
+from = '''            trusted.initiator = Some(crate::frame_tree::serialize_origin(&opener.origin));'''
+to = '''            let _ = opener;'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- cookies::a_new_tabs_navigation"]
+
+[[mutant]]
+name = "a new tab's about:blank is of no origin"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    .or_else(|| opener.cloned())'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- cookies::a_new_tabs_about_blank"]
+
+[[mutant]]
+name = "a new tab from a frame not there is opened"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let Some(origin) = self.frame_tree.committed_origin(initiator) else {
+            return self.received_bad_message(BadMessageReason::NavigationByUnknownFrame);
+        };'''
+to = '''        let origin = self
+            .frame_tree
+            .committed_origin(initiator)
+            .unwrap_or_else(CommittedOrigin::opaque);'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- a_bad_message_ends_the_renderer"]
+
+[[mutant]]
+name = "a new tab's local file goes by nothing"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if let Err(why) = self.page_may_navigate_to(url, true, origin.local) {'''
+to = '''        if let Err(why) = self.page_may_navigate_to(url, true, true) {'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- a_link_to_a_new_tab"]

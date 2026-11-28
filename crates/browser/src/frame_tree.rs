@@ -82,14 +82,14 @@ struct Committing {
 pub(crate) struct FrameGone;
 
 /// A document's origin, and whether it may open local files.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommittedOrigin {
     pub(crate) origin: url::Origin,
     pub(crate) local: bool,
 }
 
 /// `origin` as a request's initiator says it: `null` for an opaque one.
-fn serialize_origin(origin: &url::Origin) -> String {
+pub(crate) fn serialize_origin(origin: &url::Origin) -> String {
     match origin {
         origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),
         url::Origin::Opaque(_) => "null".to_owned(),

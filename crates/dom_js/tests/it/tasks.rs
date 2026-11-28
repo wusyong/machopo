@@ -72,7 +72,7 @@ impl LoadSink for Sink {
         (!request.url.ends_with("nowhere")).then_some(7)
     }
 
-    fn register_blob_url(&self, _: FrameId, _: &str, _: &dom::BlobData) {
+    fn register_blob_url(&self, _: FrameId, _: u64, _: &str, _: &dom::BlobData) {
         self.calls.borrow_mut().push("register".to_owned());
     }
 
@@ -96,7 +96,7 @@ impl LoadSink for Sink {
 /// for the host's look.
 #[test]
 fn a_fetch_goes_to_the_load_sink_as_it_is_called() {
-    let mut page = Page::new("https://example.test/");
+    let mut page = Page::with_loader("https://example.test/", Some(7));
     let calls = Rc::new(RefCell::new(Vec::new()));
     page.engine.set_load_sink(Box::new(Sink {
         calls: calls.clone(),

@@ -85,6 +85,7 @@ use protocol::network::{
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
+pub use blob::BlobUrlTaken;
 pub use cookies::{
     CanonicalCookie, CookieInclusionStatus, CookieMonster, CookieOptions, CookieSameSite,
     CookieSourceType, ExclusionReason, ParsedCookie, SameSiteCookieContext,
@@ -604,9 +605,16 @@ impl NetworkContext {
 
     /// `URL.createObjectURL`'s `url` stands for a blob of `bytes` and
     /// `mime_type`, registered by renderer `owner` (a number unique among
-    /// the renderers this context serves).
-    pub fn register_blob_url(&self, owner: u64, url: &str, mime_type: String, bytes: bytes::Bytes) {
-        self.blob_urls.register(owner, url, mime_type, bytes);
+    /// the renderers this context serves): unless another renderer
+    /// registered it, which keeps it.
+    pub fn register_blob_url(
+        &self,
+        owner: u64,
+        url: &str,
+        mime_type: String,
+        bytes: bytes::Bytes,
+    ) -> Result<(), BlobUrlTaken> {
+        self.blob_urls.register(owner, url, mime_type, bytes)
     }
 
     /// `url` no longer stands for its blob for loads, if renderer `owner`

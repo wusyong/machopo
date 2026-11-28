@@ -573,7 +573,7 @@ impl BrowserView {
         if !foreground {
             contents.was_hidden();
         }
-        contents.navigate(&params.url);
+        contents.navigate_opened(&params);
         // After the opener and the tabs it opened before: each index one
         // of a tab, or one past the last.
         #[expect(

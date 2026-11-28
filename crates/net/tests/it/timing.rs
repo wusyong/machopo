@@ -189,7 +189,9 @@ fn a_local_scheme_is_timed_as_a_whole_and_named() {
     assert_in_order(&timing_of(&response), before, TimeTicks::now());
 
     let url = "blob:http://timing.test/1";
-    network.register_blob_url(1, url, "text/plain".into(), b"blob"[..].into());
+    network
+        .register_blob_url(1, url, "text/plain".into(), b"blob"[..].into())
+        .unwrap();
     let before = TimeTicks::now();
     let response = network
         .load_blob_url(

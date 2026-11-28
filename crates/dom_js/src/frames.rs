@@ -592,14 +592,23 @@ pub(crate) fn register_blob_url(
         }
         return;
     };
-    let id = state.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+    let (id, loader) = state.dom.read(|cx| {
+        let document = document.get(cx.gc);
+        (cx.node_id(document), cx.document_loader(document))
+    });
     let Some(frame) = state.frames.of_document(id).map(|frame| frame.id) else {
         return;
     };
+    // Through no loader the browser takes none: the URL stands for nothing,
+    // as one its document never had.
+    let Some(loader) = loader.map(|loader| loader.loader) else {
+        return;
+    };
     match &state.frames.load_sink {
-        Some(sink) => sink.register_blob_url(frame, url, data),
+        Some(sink) => sink.register_blob_url(frame, loader, url, data),
         None => state.frames.requests.push(FrameRequest::RegisterBlobUrl {
             frame,
+            loader,
             url: url.to_owned(),
             data: data.clone(),
         }),

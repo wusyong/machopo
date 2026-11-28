@@ -95,7 +95,7 @@ impl LoadSink for Sink {
         Some(u64::try_from(sent.len()).expect("fewer than 2^64 requests"))
     }
 
-    fn register_blob_url(&self, _: FrameId, _: &str, _: &dom::BlobData) {}
+    fn register_blob_url(&self, _: FrameId, _: u64, _: &str, _: &dom::BlobData) {}
 
     fn revoke_blob_url(&self, _: &str) {}
 

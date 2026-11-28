@@ -199,9 +199,11 @@ pub(crate) fn owner_load_due<H: ScriptHost>(host: &mut H, owner: &NodeRoot, numb
 pub enum FrameRequest {
     /// Script in `frame`'s realm made `url` a blob URL for `data`
     /// (`URL.createObjectURL`): the host keeps it, until it is revoked or
-    /// the realm goes (the frame's next document, or the frame).
+    /// the realm goes (the frame's next document, or the frame). The
+    /// browser takes it through `loader`, the realm's document's.
     RegisterBlobUrl {
         frame: FrameId,
+        loader: u64,
         url: String,
         data: dom::BlobData,
     },

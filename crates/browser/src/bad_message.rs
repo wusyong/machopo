@@ -67,6 +67,15 @@ pub enum BadMessageReason {
     /// Script's cookies of a URL of another origin than the loader's
     /// (`RestrictedCookieManager`'s "Incorrect url origin").
     CookieUrlMismatch,
+    /// A blob URL registered that is none, or of another origin than its
+    /// loader's (`BlobURLStore`'s "URL with invalid origin passed to
+    /// BlobURLStore::Register"): its document would take the origin it
+    /// names, a renderer's own content another site's.
+    BlobUrlOriginMismatch,
+    /// A blob URL registered that another renderer registered: it would
+    /// stand for this one's blob in that one's pages (machopo's renderer
+    /// picks its URL's UUID, so the browser refuses one in use).
+    BlobUrlTaken,
     /// A question of the system's fonts the browser has no answer to: of
     /// a family or a file it gave no number, of more files than go with a
     /// message, of a script that is no ISO 15924 tag, or from a renderer

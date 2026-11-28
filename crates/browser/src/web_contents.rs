@@ -275,6 +275,9 @@ struct Asked {
     /// The frame that asked: an `about:blank` it navigates to has its
     /// document's origin.
     initiator: Option<FrameToken>,
+    /// A page of another tab that asked (a link it opened in this one):
+    /// the origin of its document, the initiator in place of a frame.
+    opener: Option<CommittedOrigin>,
     devtools_initiator: Option<String>,
     /// A reload that bypasses the HTTP cache (Shift+Reload, DevTools'
     /// `ignoreCache`: Chromium's `RELOAD_BYPASSING_CACHE`).
@@ -340,11 +343,16 @@ fn devtools_frame_token() -> FrameToken {
     FrameToken(bytes)
 }
 
-/// `content::OpenURLParams`: a link to open in another tab.
+/// `content::OpenURLParams`: a link to open in another tab, which the new
+/// tab navigates to as the page that asked (`WebContents::navigate_opened`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenUrlParams {
     pub url: String,
     pub disposition: WindowOpenDisposition,
+    /// The origin of the document whose link it is (`initiator_origin`),
+    /// from the browser's frame tree: the new tab's navigation is that
+    /// page's, for its `SameSite` cookies and an `about:blank`'s origin.
+    initiator: CommittedOrigin,
 }
 
 /// The longest title a tab takes, in characters (Chromium's
@@ -608,6 +616,21 @@ impl WebContents {
         }
     }
 
+    /// The link another tab's page opened in this one, `params`
+    /// (`Browser::OpenURLFromTab`'s navigation): a new entry, as that page
+    /// asked, its document's origin the initiator. The tab's own renderer
+    /// asked for nothing: it goes on if that one goes.
+    pub fn navigate_opened(&mut self, params: &OpenUrlParams) {
+        self.begin_navigation(
+            params.url.clone(),
+            NavigationType::NewEntry,
+            Asked {
+                opener: Some(params.initiator.clone()),
+                ..Asked::default()
+            },
+        );
+    }
+
     /// The tab's first document, `url`, as an initial entry: the first
     /// new entry takes its place (Chromium's `IsInitialEntry`), so there is
     /// no going back to it. What starts a tab that something drives (`machopo
@@ -788,6 +811,7 @@ impl WebContents {
             bypass_cache: false,
             load_flags,
             renderer_initiated: true,
+            opener: None,
         };
         // A new child frame of a document back or forward loaded: what the
         // session history has for it in the entry its parent's document is
@@ -908,15 +932,18 @@ impl WebContents {
     /// `RenderFrameHostImpl::OpenURL`: a link the renderer followed to a new
     /// tab, which the embedder opens (`take_opened`), if a page may
     /// navigate a main frame there.
-    fn open_url(&mut self, url: &str, disposition: WindowOpenDisposition) {
-        let local = self.process.can_request(url);
-        if let Err(why) = self.page_may_navigate_to(url, true, local) {
+    fn open_url(&mut self, initiator: FrameToken, url: &str, disposition: WindowOpenDisposition) {
+        let Some(origin) = self.frame_tree.committed_origin(initiator) else {
+            return self.received_bad_message(BadMessageReason::NavigationByUnknownFrame);
+        };
+        if let Err(why) = self.page_may_navigate_to(url, true, origin.local) {
             tracing::warn!(%url, why, "a page's new tab goes nowhere");
             return;
         }
         self.opened.push(OpenUrlParams {
             url: url.to_owned(),
             disposition,
+            initiator: origin,
         });
     }
 
@@ -1193,7 +1220,7 @@ impl WebContents {
         navigation_start: TimeTicks,
     ) {
         let main_frame = frame == self.frame_tree.root();
-        let page = self.about_document(frame, &url, asked.initiator);
+        let page = self.about_document(frame, &url, asked.initiator, asked.opener.as_ref());
         self.post(ContentsEvent::NavigationStarted(NavigationStarted {
             frame,
             main_frame,
@@ -1243,10 +1270,13 @@ impl WebContents {
             RequestDestination::Iframe
         };
         let mut request = ResourceRequest::new(url.clone(), destination);
-        request.trusted = Some(
-            self.frame_tree
-                .navigation_params(frame, &url, asked.initiator),
-        );
+        let mut trusted = self
+            .frame_tree
+            .navigation_params(frame, &url, asked.initiator);
+        if let Some(opener) = asked.opener.as_ref().filter(|_| asked.initiator.is_none()) {
+            trusted.initiator = Some(crate::frame_tree::serialize_origin(&opener.origin));
+        }
+        request.trusted = Some(trusted);
         request.load_flags = navigation_load_flags(navigation_type).union(asked.load_flags);
         // DevTools' cache disabled: past it, whatever the navigation
         // (`ApplyNetworkRequestOverrides`).
@@ -1311,10 +1341,11 @@ impl WebContents {
         })
     }
 
-    /// The document of `frame`'s navigation to `url`, as `initiator` asked,
-    /// if it loads nothing (Chromium's `NeedsUrlLoader`), and its origin:
-    /// `about:blank`'s empty, of the initiator's origin (an opaque one
-    /// for one the browser starts); a child frame's `about:srcdoc`, its
+    /// The document of `frame`'s navigation to `url`, as `initiator` asked
+    /// (or a page of another tab, of origin `opener`), if it loads nothing
+    /// (Chromium's `NeedsUrlLoader`), and its origin: `about:blank`'s
+    /// empty, of the initiator's origin (an opaque one for one the browser
+    /// starts); a child frame's `about:srcdoc`, its
     /// iframe's `srcdoc`, of its parent's origin, if it may have it
     /// (`may_commit_srcdoc`), else the error page; the main frame's other
     /// built-in pages, of no origin. `None` for any other URL.
@@ -1323,6 +1354,7 @@ impl WebContents {
         frame: FrameToken,
         url: &str,
         initiator: Option<FrameToken>,
+        opener: Option<&CommittedOrigin>,
     ) -> Option<(CommittedDocument, CommittedOrigin)> {
         let main_frame = frame == self.frame_tree.root();
         let page = |markup: &str| CommittedDocument::page(url.to_owned(), markup.to_owned());
@@ -1330,6 +1362,7 @@ impl WebContents {
             "blank" => {
                 let origin = initiator
                     .and_then(|initiator| self.frame_tree.committed_origin(initiator))
+                    .or_else(|| opener.cloned())
                     .unwrap_or_else(CommittedOrigin::opaque);
                 Some((page(""), origin))
             }
@@ -2155,7 +2188,11 @@ impl WebContents {
                 *history_in_new_child_frame,
                 *load_flags,
             ),
-            RendererHostMsg::OpenUrl { url, disposition } => self.open_url(url, *disposition),
+            RendererHostMsg::OpenUrl {
+                initiator,
+                url,
+                disposition,
+            } => self.open_url(*initiator, url, *disposition),
             // The embedder shows it.
             RendererHostMsg::SetCursor(_)
             | RendererHostMsg::TakeFocus { .. }

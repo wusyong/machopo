@@ -50,21 +50,36 @@ fn key(url: &str) -> Option<String> {
     Some(url.into())
 }
 
+/// A blob URL another renderer registered, which keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlobUrlTaken;
+
 impl BlobUrlRegistry {
-    pub(crate) fn register(&self, owner: u64, url: &str, mime_type: String, bytes: Bytes) {
+    /// `url` for renderer `owner`'s blob: in place of its own one before,
+    /// but not of another's (revoked or not, a navigation may still take
+    /// that one's).
+    pub(crate) fn register(
+        &self,
+        owner: u64,
+        url: &str,
+        mime_type: String,
+        bytes: Bytes,
+    ) -> Result<(), BlobUrlTaken> {
         let Some(key) = key(url) else {
-            return;
+            return Ok(());
         };
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if entries.get(&key).is_some_and(|entry| entry.owner != owner) {
+            return Err(BlobUrlTaken);
+        }
         let entry = Entry {
             owner,
             mime_type,
             bytes,
             revoked: false,
         };
-        self.entries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(key, entry);
+        entries.insert(key, entry);
+        Ok(())
     }
 
     /// Revokes `url` for loads, if renderer `owner` registered it.
@@ -215,12 +230,14 @@ mod tests {
 
     fn registry() -> BlobUrlRegistry {
         let registry = BlobUrlRegistry::default();
-        registry.register(
-            1,
-            URL,
-            "text/plain;charset=utf-8".into(),
-            Bytes::from_static(b"hello"),
-        );
+        registry
+            .register(
+                1,
+                URL,
+                "text/plain;charset=utf-8".into(),
+                Bytes::from_static(b"hello"),
+            )
+            .unwrap();
         registry
     }
 
@@ -276,6 +293,27 @@ mod tests {
                 .load(&get("blob:https://a.test/other"), Some(1))
                 .is_err()
         );
+    }
+
+    /// A URL another renderer registered stays its, revoked or not, until
+    /// it goes; its own a renderer registers again.
+    #[test]
+    fn another_renderers_url_is_kept() {
+        let registry = registry();
+        let again =
+            |owner| registry.register(owner, &format!("{URL}#f"), String::new(), Bytes::new());
+        assert_eq!(again(2), Err(BlobUrlTaken));
+        registry.revoke(1, URL);
+        assert_eq!(
+            again(2),
+            Err(BlobUrlTaken),
+            "revoked, for a navigation still"
+        );
+        assert_eq!(registry.load(&get(URL), None).unwrap().body, &b"hello"[..]);
+        assert_eq!(again(1), Ok(()));
+        assert!(registry.load(&get(URL), Some(1)).is_ok(), "its own again");
+        registry.forget(1, URL);
+        assert_eq!(again(2), Ok(()));
     }
 
     #[test]

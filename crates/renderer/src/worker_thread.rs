@@ -631,6 +631,7 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
         self.blob_urls.borrow_mut().insert(url.to_owned());
         let _ = self.to_browser.send(RendererHostMsg::RegisterBlobUrl {
             worker: Some(self.id),
+            loader: self.loader,
             url: url.to_owned(),
             mime_type: data.type_().to_owned(),
             bytes: data.shared_bytes().into(),

@@ -791,11 +791,16 @@ fn a_renderer_process_is_told_the_zone_a_copied_localtime_is() {
     let (in_a_process, pids) = seen(&["--process-per-tab"]);
     assert_eq!(in_a_process, on_a_thread);
     let pid = pids[0].to_string();
-    let tz = environment_of(pids[0])
-        .into_iter()
+    let environment = environment_of(pids[0]);
+    let tz = environment
+        .iter()
         .find(|(name, _)| name == "TZ")
-        .map(|(_, value)| value);
-    assert_eq!(tz.as_deref(), Some(zone.as_str()));
+        .map(|(_, value)| value.as_str());
+    assert_eq!(
+        tz,
+        Some(zone.as_str()),
+        "renderer {pid} of {pids:?}, its environment {environment:?}"
+    );
     let root = std::fs::read_link(format!("/proc/{pid}/root")).unwrap();
     assert!(root.ends_with("fdinfo"), "{root:?}");
 }

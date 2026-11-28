@@ -73,10 +73,34 @@ fn a_readers_events_are_tasks() {
     assert_eq!(page.eval("log.join(' ')"), "load a load b loadend b");
 }
 
+/// Each through its document's loader, which the browser checks it by;
+/// one of a document with none goes nowhere.
 #[test]
 fn blob_urls_go_to_the_host() {
-    let mut page = Page::new("https://example.test/");
-    page.engine.take_frame_requests();
+    let mut engine = crate::TestEngine::new(dom_api::EngineSettings { web_tests: true });
+    let document = engine
+        .create_window(
+            engine.top_frame(),
+            "https://example.test/",
+            std::time::Instant::now(),
+        )
+        .expect("a window");
+    let mut page = Page::of(engine);
+    page.eval("URL.createObjectURL(new Blob(['no loader'])); 0");
+    assert!(
+        page.engine.take_frame_requests().is_empty(),
+        "a document the browser gave no loader"
+    );
+    page.engine.dom_mut().mutate(|cx| {
+        cx.set_document_loader(
+            document.get(cx.gc),
+            dom::DocumentLoader {
+                loader: 7,
+                navigation: None,
+            },
+        );
+    });
+    drop(document);
     let url = page.eval("var u = URL.createObjectURL(new Blob(['hi'], { type: 'text/x' })); u");
     assert!(
         url.starts_with("blob:https://example.test/")
@@ -95,8 +119,14 @@ fn blob_urls_go_to_the_host() {
         .take_frame_requests()
         .into_iter()
         .map(|request| match request {
-            FrameRequest::RegisterBlobUrl { frame, url, data } => {
+            FrameRequest::RegisterBlobUrl {
+                frame,
+                loader,
+                url,
+                data,
+            } => {
                 assert_eq!(frame, page.engine.top_frame());
+                assert_eq!(loader, 7, "its document's");
                 format!("register {url} {} {:?}", data.type_(), data.bytes())
             }
             FrameRequest::RevokeBlobUrl { url } => format!("revoke {url}"),

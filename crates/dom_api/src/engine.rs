@@ -109,8 +109,15 @@ pub trait LoadSink {
         None
     }
     /// `url` made a blob URL for `data` in `frame`'s realm
-    /// (`URL.createObjectURL`).
-    fn register_blob_url(&self, frame: crate::FrameId, url: &str, data: &dom::BlobData);
+    /// (`URL.createObjectURL`), whose document's loader is `loader`
+    /// (`Cx::document_loader`): the browser takes the URL through it.
+    fn register_blob_url(
+        &self,
+        frame: crate::FrameId,
+        loader: u64,
+        url: &str,
+        data: &dom::BlobData,
+    );
 
     /// `url` revoked (`URL.revokeObjectURL`): no load after it gets it.
     fn revoke_blob_url(&self, url: &str);

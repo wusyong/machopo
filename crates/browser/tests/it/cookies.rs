@@ -6,6 +6,7 @@
 
 use browser::{NetworkContextParams, Profile, StoragePartition};
 use net::test_server::{Route, TestServer};
+use protocol::renderer::{RendererHostMsg, WindowOpenDisposition};
 
 use crate::dom_storage::titles_until;
 use crate::navigation::{server, tab_in};
@@ -266,4 +267,94 @@ try {
     let title = titles_until(&mut web_contents, &host_rx, |title| !title.is_empty());
     assert_eq!(title, "[]:true");
     web_contents.shutdown();
+}
+
+/// A link a page opens in a new tab is that page's navigation: to another
+/// site, it sends the site's `Lax` cookies and not its `Strict` ones, as a
+/// link followed in the page's own tab does; the user's own navigation
+/// there sends both.
+#[test]
+fn a_new_tabs_navigation_is_the_pages_that_opened_it() {
+    let server = server(&[
+        (
+            "/set",
+            Route::ok("text/html", "<script>document.title = 'set'</script>")
+                .with_header("Set-Cookie", "strict=1; SameSite=Strict")
+                .with_header("Set-Cookie", "lax=1; SameSite=Lax"),
+        ),
+        (
+            "/opener",
+            Route::ok("text/html", "<script>document.title = 'opener'</script>"),
+        ),
+        (
+            "/check",
+            Route::ok("text/html", "<script>document.title = 'checked'</script>"),
+        ),
+    ]);
+    let partition = partition();
+    let (mut opener, opener_rx) = tab_in(partition.clone());
+    opener.navigate(server.url_for_host("b.localhost", "/set"));
+    titles_until(&mut opener, &opener_rx, |title| title == "set");
+    opener.navigate(server.url_for_host("a.localhost", "/opener"));
+    titles_until(&mut opener, &opener_rx, |title| title == "opener");
+    // The renderer's, for a link of the page's (a click of the user's).
+    opener.on_renderer_message(&RendererHostMsg::OpenUrl {
+        initiator: opener.devtools_frame_token(),
+        url: server.url_for_host("b.localhost", "/check"),
+        disposition: WindowOpenDisposition::NewForegroundTab,
+    });
+    let [opened] = <[_; 1]>::try_from(opener.take_opened()).expect("one new tab");
+    let (mut tab, tab_rx) = tab_in(partition);
+    tab.navigate_opened(&opened);
+    titles_until(&mut tab, &tab_rx, |title| title == "checked");
+    assert_eq!(sent(&server, "/check").as_deref(), Some("lax=1"));
+    tab.navigate(server.url_for_host("b.localhost", "/check"));
+    titles_until(&mut tab, &tab_rx, |title| title == "checked");
+    let mut both: Vec<String> = sent(&server, "/check")
+        .unwrap_or_default()
+        .split("; ")
+        .map(str::to_owned)
+        .collect();
+    both.sort();
+    assert_eq!(both, ["lax=1", "strict=1"]);
+    tab.shutdown();
+    opener.shutdown();
+}
+
+/// A new tab a page opens at `about:blank` has the page's origin, as an
+/// `about:blank` a frame navigates to has its initiator's.
+#[test]
+fn a_new_tabs_about_blank_is_of_the_page_that_opened_it() {
+    let server = server(&[(
+        "/opener",
+        Route::ok("text/html", "<script>document.title = 'opener'</script>"),
+    )]);
+    let partition = partition();
+    let (mut opener, opener_rx) = tab_in(partition.clone());
+    let page = server.url_for_host("a.localhost", "/opener");
+    opener.navigate(page.clone());
+    titles_until(&mut opener, &opener_rx, |title| title == "opener");
+    opener.on_renderer_message(&RendererHostMsg::OpenUrl {
+        initiator: opener.devtools_frame_token(),
+        url: "about:blank".into(),
+        disposition: WindowOpenDisposition::NewForegroundTab,
+    });
+    let [opened] = <[_; 1]>::try_from(opener.take_opened()).expect("one new tab");
+    let (mut tab, tab_rx) = tab_in(partition);
+    tab.navigate_opened(&opened);
+    loop {
+        let msg = crate::navigation::next_message(&mut tab, &tab_rx, crate::navigation::TIMEOUT)
+            .expect("the renderer commits");
+        tab.on_renderer_message(&msg);
+        if matches!(msg, RendererHostMsg::DidCommitNavigation { .. }) {
+            break;
+        }
+    }
+    let main = tab.devtools_frame_token();
+    assert_eq!(
+        tab.frame_tree().origin(main),
+        Some(&url::Url::parse(&page).unwrap().origin())
+    );
+    tab.shutdown();
+    opener.shutdown();
 }

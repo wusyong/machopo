@@ -765,8 +765,11 @@ pub enum RendererHostMsg {
         load_flags: crate::network::LoadFlags,
     },
     /// `FrameHost::OpenURL`: a link followed to a new tab, which the
-    /// browser decides whether to open.
+    /// browser decides whether to open, as frame `initiator` asked (its
+    /// document's origin the new tab's navigation's initiator, as
+    /// `OpenURLParams::initiator_origin`, by the browser's frame tree).
     OpenUrl {
+        initiator: crate::FrameToken,
         url: String,
         disposition: WindowOpenDisposition,
     },
@@ -893,9 +896,14 @@ pub enum RendererHostMsg {
     /// (`worker`, its thread sending it; none: the main thread's) does
     /// (`DedicatedWorkerGone`; one the browser doesn't know as the
     /// renderer's registers nothing). Sent before any load of it, on the
-    /// same channel. Handled on the IO thread.
+    /// same channel. Handled on the IO thread. Through `loader`, the
+    /// loader of the document whose realm made it (a worker's, the
+    /// worker's): `url`'s origin is to be the loader's, or opaque
+    /// (`BlobURLStoreImpl`'s store is bound to its frame's origin), and no
+    /// other renderer's URL.
     RegisterBlobUrl {
         worker: Option<u64>,
+        loader: u64,
         url: String,
         mime_type: String,
         bytes: BigBuffer,
