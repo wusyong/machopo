@@ -52,6 +52,11 @@ fn child() {
             };
             let _ = link.send(to_browser::HOST, &cookie);
         }),
+        // A storage area of a frame the browser's tree hasn't (one it made
+        // up): the browser is to answer, as for a frame that has gone, and
+        // it ends with `ANSWERED_NONE` once it hears so (else it waits on,
+        // and ends by its timeout).
+        Some("a storage area of no frame") => rogue_answered(),
         // Once the browser gave its page's document a loader: a blob URL of
         // another site, which that document would be of; one of the page's
         // origin that another renderer has (`TAKEN_BLOB_URL`).
@@ -175,6 +180,45 @@ fn rogue_on_commit(send: impl Fn(&ChannelLink, u64, &str) + Send + 'static) -> !
     let (io, io_handle) = IoLoop::new().expect("a way to wait");
     io_handle.serve(endpoint, OnCommit { link, send });
     std::thread::spawn(move || io.run());
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+/// What [`rogue_answered`] ends with once the browser answered.
+const ANSWERED_NONE: i32 = 7;
+
+/// [`rogue`], that asks for the storage area of a frame there is none of,
+/// and ends with [`ANSWERED_NONE`] once the browser answers that it has
+/// none, as a renderer's main thread waits for the answer.
+fn rogue_answered() -> ! {
+    struct Answered;
+    impl Handler<Channel> for Answered {
+        fn message(&mut self, mut received: Received<'_, Channel>) -> Result<(), BadMessage> {
+            if received.destination() == to_renderer::MAIN
+                && let Ok(RendererMsg::StorageAreaOpened {
+                    request_id: 1,
+                    area: None,
+                }) = received.decode::<RendererMsg>()
+            {
+                std::process::exit(ANSWERED_NONE);
+            }
+            Ok(())
+        }
+    }
+    let channel = ipc::platform::inherited().expect("its end of the channel");
+    let (link, endpoint) = endpoint::endpoint(channel, config(false));
+    let (io, io_handle) = IoLoop::new().expect("a way to wait");
+    io_handle.serve(endpoint, Answered);
+    std::thread::spawn(move || io.run());
+    let _ = link.send(
+        to_browser::HOST,
+        &RendererHostMsg::OpenStorageArea {
+            frame: protocol::FrameToken([7; 16]),
+            kind: protocol::renderer::StorageKind::Local,
+            request_id: 1,
+        },
+    );
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
     }
@@ -841,6 +885,35 @@ fn a_process_that_sends_what_no_renderer_does_is_killed() {
         assert_eq!(web_contents.renderer_pid(), None, "{role}");
         web_contents.shutdown();
     }
+}
+
+/// The storage area of a frame the browser's tree hasn't is answered, none,
+/// as one of a frame that has gone: the renderer's main thread, which
+/// waits for it, isn't left waiting (the renderer, a rogue one, ends once
+/// it hears).
+#[test]
+fn a_storage_area_of_no_frame_is_answered() {
+    let (mut web_contents, host_rx) = tab_launched(
+        launching("a storage area of no frame"),
+        false,
+        gfx::SystemColors::DEFAULT,
+        in_memory(),
+    );
+    // What it sends the browser takes, till it is gone.
+    loop {
+        let msg = next_message(&mut web_contents, &host_rx, TIMEOUT).expect("the renderer goes");
+        web_contents.on_renderer_message(&msg);
+        if matches!(msg, RendererHostMsg::RendererGone) {
+            break;
+        }
+    }
+    let exit = web_contents.renderer_exit().expect("ended");
+    assert_eq!(
+        exit.status.and_then(|status| status.code()),
+        Some(ANSWERED_NONE),
+        "{exit:?}"
+    );
+    web_contents.shutdown();
 }
 
 /// A renderer taken over has its document's loader: a request through it

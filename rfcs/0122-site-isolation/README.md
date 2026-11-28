@@ -1,13 +1,16 @@
 # RFC 0122：site isolation 的路線圖
 
 - 開始日期：2026-11-27
-- 狀態：👍 已接受：2026-11-27（路線圖層級的五條定了；下一步是開 A 那一份）
+- 狀態：✅ 已完成：2026-11-28（M1、M2 達成；M3、M4 照已決定的事項第 7 條各自開 RFC）
 - 路線圖：`roadmap.md`
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 ## 摘要
 
-renderer 已經是自己的 process、關在作業系統的 sandbox 裡，但一個分頁從頭到尾用同一個 renderer：使用者在同一個分頁走過的每個網站、頁面裡每個跨網站的 iframe，都在同一個 process 裡，Browser 也不知道「這個 process 是哪個網站的」。這份是路線圖，不直接實作：把「一個 process 只有一個網站的東西，而且 Browser 強制」拆成幾份 RFC、排順序、估規模，每一份開始時再各自決定設計。分四個里程碑：(1) renderer 弄不倒 Browser、讀不到別的網站的回應；(2) 一個 process 一個最上層的網站，Browser 照它鎖；(3) frame 的政策、彈出視窗和 `document.domain`；(4) 跨網站的 iframe 在自己的 process（OOPIF），完整的 site isolation。規模以 renderer 拆 process 那份為 1：前兩個里程碑合計約 2.5，第三個約 2，OOPIF 另外 4 到 6（`roadmap.md`）。
+renderer 已經是自己的 process、關在作業系統的 sandbox 裡，但一個分頁從頭到尾用同一個 renderer：使用者在同一個分頁走過的每個網站、頁面裡每個跨網站的 iframe，都在同一個 process 裡，Browser 也不知道「這個 process 是哪個網站的」。這份是路線圖，不直接實作：把「一個 process 只有一個網站的東西，而且 Browser 強制」拆成幾份 RFC、排順序、估規模，每一份開始時再各自決定設計。分四個里程碑：(1) renderer 弄不倒 Browser、讀不到別的網站的回應；(2) 一個 process 一個最上層的網站，Browser 照它鎖；(3) frame 的政策、彈出視窗和 `document.domain`；(4) 跨網站的 iframe 在自己的 process（OOPIF），完整的 site isolation。規模以 renderer 拆 process 那份為 1：前兩個里程碑合計約 2.5，第三個約 2.5（加了 X 之後），OOPIF 另外 4 到 6（`roadmap.md`）。
+
+M1、M2 在 2026-11-28 達成（RFC 0123、0124、0127、0128、0129），這份照已決定的事項第 1 條在那時完成。M3、M4 做的時候各自開 RFC，引用 `roadmap.md` 的代號（第 7 條）；`roadmap.md` 停在完成時的樣子。
 
 ## 動機
 
@@ -36,7 +39,7 @@ renderer 已經是自己的 process、關在作業系統的 sandbox 裡，但一
 - Android 那種「只隔離一部分網站」的模式、process 數量的上限和重用的策略的調校（先做最簡單的，量到問題再說）。
 - extension、WebUI 的隔離（machopo 沒有）。
 
-要解決的 `docs/limitations.md` 裡的限制（各份 RFC 做完時刪）：「隔離」的「renderer 還有兩條路能讓 Browser 結束」、「名稱表和屬性值的表在同一個 renderer 裡共用」；「iframe」的「跨網站的 iframe 和頁面在同一個 renderer」；`MessagePort` 不能跨 renderer、沒有 `window.open`、iframe 沒有 `sandbox` 的那幾條。
+要解決的 `docs/limitations.md` 裡的限制（各份 RFC 做完時改）：「隔離」的「renderer 還有兩條路能讓 Browser 結束」（RFC 0123 改寫成剩下的：Viz 和 GPU 在 Browser 的 process 裡）、「名稱表和屬性值的表在同一個 renderer 裡共用」（RFC 0124 之後只在同一個網站的頁面之間）；「iframe」的「跨網站的 iframe 和頁面在同一個 renderer」（RFC 0127 改寫成 L1 的保證和剩下的缺口）。M3、M4 的那幾條還在：跨網站的 iframe 和頁面在同一個 renderer、`MessagePort` 不能跨 renderer、沒有 `window.open`、iframe 沒有 `sandbox`。
 
 ## 設計概要
 
@@ -104,7 +107,7 @@ M1 和 M2 一定做，M4 做不做、什麼時候做，在 M2 做完、原型量
 
 ### 每個里程碑怎麼驗
 
-- **M1**：fuzzer 餵 Browser 壞的訊息和壞的 frame，Browser 不結束（放進每週的 CI）；WPT 的 `fetch/orb/`、`fetch/cross-origin-resource-policy/`、`x-frame-options/`、`content-security-policy/frame-ancestors/`。
+- **M1**：Browser 處理 renderer 輸入的模組（`browser`、`viz`、`net`、`protocol` 的 `viz.rs`）打開 clippy 的 panic 類 lint，每一處寫明不變式，壞的訊息和 frame 有測試（RFC 0123 的已決定的事項第 14 條取代了原本打算的「fuzzer 進每週的 CI」）；WPT 的 `fetch/orb/`、`fetch/corb/`、`fetch/cross-origin-resource-policy/`、`x-frame-options/`、`content-security-policy/frame-ancestors/`。
 - **M2**：從外面看 process：同一個分頁導覽到別的網站之後 renderer 的 pid 變了、舊的結束了；一個「被攻破的 renderer」（測試用的假 renderer，`RendererLauncher::Detached` 或能送任意訊息的 child）要別的網站的 cookie、storage、帶別的 origin 的 commit，都是壞訊息；session history、DevTools 的 session、WebDriver 的 session 跨過換 process 還在。
 - **M4**：WPT 裡靠跨源 iframe 的測試（`html/browsers/`、`html/semantics/embedded-content/the-iframe-element/`、`cross-origin-*`）；情境和 reftest 的截圖合成好幾個 process 的 surface。
 - 每份 RFC：mutation test、量測工具的測試（process 的對應變了）。
@@ -113,10 +116,10 @@ M1 和 M2 一定做，M4 做不做、什麼時候做，在 M2 做完、原型量
 
 路線圖本身：
 
-0. 草稿和盤點（這一版）。
-1. 定路線圖層級的事（「待決定」）。
-2. 照 `roadmap.md` 開各份 RFC；每開一份，把表裡的代號換成編號和連結，做完寫上日期。里程碑達成時寫上日期。
-3. M2 達成時重新評估 M4（原型、規模）。
+0. 草稿和盤點（2026-11-27）。
+1. 定路線圖層級的事（已決定的事項第 1 到 6 條，2026-11-27）。
+2. 照 `roadmap.md` 開 M1、M2 的五份 RFC，代號換成編號和連結、做完寫上日期，里程碑寫上達成的日期（2026-11-27 到 11-28，`progress.md`）。
+3. M2 達成時重新評估 M4：照第 1 條要等原型（P）量過，原型本身還沒做；移到「之後的可能」（第 7 條）。
 
 ## 缺點
 
@@ -149,16 +152,18 @@ M1 和 M2 一定做，M4 做不做、什麼時候做，在 M2 做完、原型量
 4. **OOPIF 之前，process 鎖到最上層的網站（L1）**（2026-11-27，使用者決定）：一個 renderer process 只拿得到「最上層是 X」的資料：X 的第一方資料，和嵌在 X 底下的其他網站的第三方資料（分區的、沒有 cookie 的）。檢查是 Browser 已經算好的東西的比較：每份文件的 loader 的 `IsolationInfo` 和每個 `StorageKey` 的最上層網站，是不是這個 process 鎖的那個。理由：成本小（要比的 Browser 都有了），到 OOPIF 時只換比較的規則（最上層的網站換成 frame 的 site），鎖放在哪、在哪些訊息上檢查、壞訊息、測試用的「被攻破的 renderer」都沿用；M4 做不做還沒定（第 1 條），這個形態可能很久；跨網站的導覽換 process 那一份（C）重寫「這次導覽放進哪個 process」，鎖是它的安全網（放錯 process 時在 commit 擋下來）；補現有照文件的檢查的洞（`RegisterBlobUrl` 的 origin 沒有對照），之後新加的訊息漏了檢查時有一層接著。它靠的前提是 machopo 已經有的：第三方的 cookie 一律不送，storage 和 HTTP cache 照最上層的網站分區；之後要加「允許第三方 cookie」的開關要等 OOPIF。代價：嵌的和被嵌的在同一個 process，互相讀得到；不靠 cookie 的私密內容被嵌進來時讀得到；Chromium 沒有這個形態，保證要自己論證和測。老實說它多的是第二層：C 做完之後，現有照文件的檢查已經擋住大部分（renderer 只拿著自己 process 裡的文件的 loader，假的 commit 會被抓到）。不選不鎖到 OOPIF（L2：最簡單，Chromium 的過渡期也是，但那段時間沒有 process 層級的不變式）。不選照 frame 的 site 鎖、跨網站的 iframe 不載入（L3：iframe 全壞）。
 5. **M1 的三份一份一份做：A、N、F1，然後 M2 的 C（S1）**（2026-11-27，使用者決定）：理由：每份單獨審、單獨 merge；A 最小，而且它整理的是 C 要大改的那幾個檔案（`render_process_host.rs`、`web_contents.rs`）；N、F1 和 C 幾乎不重疊，順序之後可以調。不選分到不同的機器同時做（S2：最快，但要協調，A 和 C 改同一批檔案）。不選先做 N（S3：以現在的風險看 ORB 更直接，不用先攻破 renderer 就能把跨源的資料要進它的記憶體；A 小、很快，所以還是 A 先，要對調也可以）。
 6. **A 之後先做 C、B，再做 N、F1（S2）**（2026-11-27，使用者決定；改了第 5 條的順序）：做完 A、開始 N 的盤點時找到的：machopo 從不送、也不收第三方的 cookie（`net` 的 `cookie_jar.rs` 的 `accessible`：只有第一方的和 partitioned 的），HTTP cache 照最上層和 frame 的網站分開，所以網站 A 的頁面用 `<img>`、`<script>` 要網站 B 的資源時，B 給的是沒有登入的使用者的東西；ORB 和 CORP 剩下擋的是靠網路的位置認證的資源（內網、`localhost`）和以後放寬第三方 cookie 時；被嵌在 A 裡的 B 也沒有 cookie，`X-Frame-Options` 擋的 clickjacking 大多也做不成。反過來，C 擋的洞現在就在、cookie 的政策也擋不住：一個分頁從頭到尾用同一個 renderer，攻破它的網頁 A 之後，這個分頁導覽到 B（使用者點的，或 A 設 `location`），B 是最上層、cookie 照送，它的資料就在被攻破的 process 裡。B 建在 C 上。代價：C 比 N 大很多，M1（「讀不到別的網站的回應」）晚一點才達成。不選照原本的 A、N、F1、C、B（S1）。
+7. **完成之後，M3、M4 各自開 RFC，不另開路線圖（K1）**（2026-11-28，使用者決定）：這份照第 1 條在 M2 達成時完成（M1 也同一天達成），完成的 RFC 不再更新，`roadmap.md` 停在完成時的樣子：M3、M4 和 FM 那幾列的範圍、規模、相依當背景，「每一份開始時要定的」照樣有用。F2、W、G、X、FM 要做時各開一份 RFC，引用這裡的代號；M4 的「原型量過再決定」放進「之後的可能」，真要做 OOPIF 時再開新的路線圖。理由：文件最少，每一份的狀態看 `rfcs/README.md` 的索引；M3 的四份規模不大，相依只有一條（X 要 W 和 N）。代價：沒有一個地方隨時標著 M3 做到哪。不選另開一份 M3、M4 的路線圖（K2：多一份要維護的文件）。不選這份不收尾、做到 M3（K3：違反第 1 條，也和停住的 M4 混在一起）。
 
 ## 待決定
 
-路線圖層級的都定了（已決定的事項第 1 到 6 條；路線圖在這份的 `roadmap.md` 維護、這份到 M2 達成時算完成，是第 1 條的一部分）。
-
-各份 RFC 開始時才定的，列在 `roadmap.md` 的「每一份開始時要定的（先記下來）」。
+沒有（已決定的事項第 1 到 7 條）。M3、M4 的各份開始時才定的，列在 `roadmap.md` 的「每一份開始時要定的（先記下來）」。
 
 ## 之後的可能
 
+- M3：F2（iframe 的 `sandbox`，下一份）、W（`window.open`、`opener`、COOP）、G（`Origin-Agent-Cluster` 和 `document.domain`）、X（cross-origin isolated），各自開 RFC（第 7 條、`roadmap.md`）。
+- FM（Fetch Metadata），不在任何里程碑裡。
+- M4：先做原型（P），量過、修正規模之後再決定做不做 OOPIF；要做的話開新的路線圖。
+
 - 鎖收到 origin（`--isolate-origins` 那一類）。
-- cross-origin isolated（COOP 加 COEP）和 `SharedArrayBuffer`：2026-11-28 排進 `roadmap.md`，代號 X，放在 M3。
 - process 的上限和重用（同一個 site 的 process 跨分頁共用）。
 - GPU process、network service 的 process。

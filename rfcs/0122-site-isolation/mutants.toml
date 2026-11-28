@@ -1,0 +1,15 @@
+# The wrap-up's mutant (a storage area of no frame is answered): `python3 scripts/test.py mutate rfcs/0122-site-isolation/mutants.toml`.
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "renderer_process::a_storage_area_of_no_frame"]
+timeout = 1200
+
+[[mutant]]
+name = "a storage area of no frame isn't answered"
+file = "crates/browser/src/web_contents.rs"
+from = '''            None => to_renderer(RendererMsg::StorageAreaOpened {
+                request_id,
+                area: None,
+            }),'''
+to = '''            None => drop(RendererMsg::StorageAreaOpened {
+                request_id,
+                area: None,
+            }),'''
