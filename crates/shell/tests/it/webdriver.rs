@@ -265,11 +265,15 @@ fn a_session_navigates() {
 /// navigation is on its way as Navigate To answers.
 #[test]
 fn the_current_url_is_the_documents_shown() {
+    // `Page.navigate` answers once the response's head comes (as Chromium's
+    // does at ready to commit), and the document commits once its body
+    // starts: the body's delay, not the head's, keeps `/slow` from
+    // committing before the next command, however busy the machine.
     let server = server(&[
         ("/a", Route::ok("text/html", "<!DOCTYPE html>a")),
         (
             "/slow",
-            Route::ok("text/html", "<!DOCTYPE html>slow").with_delay(Duration::from_secs(3)),
+            Route::ok("text/html", "<!DOCTYPE html>slow").with_body_delay(Duration::from_secs(3)),
         ),
     ]);
     let addr = driver();
