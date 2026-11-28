@@ -293,6 +293,18 @@ fn update_element_changes<H: ScriptHost>(host: &mut H) {
                     process_iframe_attributes(host, &owner, false);
                 }
             }
+            // Its frame's host told, for the frame's next navigation (HTML:
+            // the flags count from then on).
+            FrameOwnerChange::SandboxChanged(owner) => {
+                let changed = host.read(|cx| {
+                    let owner = cx.node_by_id(owner)?;
+                    cx.content_document(owner)?;
+                    Some((cx.root(owner), iframe_sandbox(cx, owner)))
+                });
+                if let Some((owner, sandbox)) = changed {
+                    host.frame_policy_changed(&owner, sandbox);
+                }
+            }
         }
     }
 }
@@ -686,6 +698,55 @@ pub fn documents_in_tree_order<'gc>(
         stack.extend(cx.child_content_documents(document).into_iter().rev());
     }
     documents
+}
+
+/// `owner`'s `sandbox` flags (an iframe's, HTML's "parse a sandboxing
+/// directive" of its attribute, as Chromium's `ParseWebSandboxPolicy`):
+/// none without the attribute.
+pub fn iframe_sandbox<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    owner: dom::NodeRef<'gc>,
+) -> protocol::sandbox::SandboxFlags {
+    cx.attribute_value_by_id(owner, names::local::SANDBOX)
+        .map_or(protocol::sandbox::SandboxFlags::NONE, |value| {
+            protocol::sandbox::parse(&value.borrow().to_string()).flags
+        })
+}
+
+/// HTML's "scripting is disabled" for `document`: it is shown in no
+/// browsing context (no window, or discarded), or is sandboxed without
+/// `allow-scripts` (Blink's `CanExecuteScripts`, of the sandboxed scripts
+/// flag).
+pub fn scripting_disabled<'gc>(cx: &dom::Cx<'_, 'gc>, document: dom::NodeRef<'gc>) -> bool {
+    cx.window_of(document).is_none()
+        || cx.is_discarded(document)
+        || document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::SCRIPTS)
+}
+
+/// `document` is sandboxed by `flags`, as its host committed it: the DOM
+/// keeps them, its origin a new opaque one with the origin flag, scripting
+/// disabled for it with the scripts flag.
+pub fn set_document_sandbox<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    document: dom::NodeRef<'gc>,
+    flags: protocol::sandbox::SandboxFlags,
+) {
+    use protocol::sandbox::SandboxFlags;
+    cx.set_sandbox(
+        document,
+        flags.bits(),
+        flags.contains(SandboxFlags::ORIGIN),
+        flags.contains(SandboxFlags::SCRIPTS),
+    );
+}
+
+/// What `document` is sandboxed by, as its host committed it (the DOM's
+/// bits, read as flags).
+pub fn document_sandbox<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    document: dom::NodeRef<'gc>,
+) -> protocol::sandbox::SandboxFlags {
+    protocol::sandbox::SandboxFlags::from_bits(cx.sandbox_flags(document))
 }
 
 /// `document`'s origin, as its URL's (`dom`'s `document_origin`): none

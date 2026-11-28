@@ -1,0 +1,275 @@
+# Stage 1's mutants (the flags' way, the origin and script): `python3 scripts/test.py mutate rfcs/0130-iframe-sandbox/mutants-1.toml`.
+test = ["cargo", "test", "-q", "-p", "protocol", "--lib", "sandbox"]
+timeout = 2400
+
+[[mutant]]
+name = "allow-scripts lifts the scripts flag alone"
+file = "crates/protocol/src/sandbox.rs"
+from = '''        "allow-scripts" => F::AUTOMATIC_FEATURES | F::SCRIPTS,'''
+to = '''        "allow-scripts" => F::SCRIPTS,'''
+
+[[mutant]]
+name = "allow-popups lifts the popups flag alone"
+file = "crates/protocol/src/sandbox.rs"
+from = '''        "allow-popups" => F::POPUPS | F::TOP_NAVIGATION_TO_CUSTOM_PROTOCOLS,'''
+to = '''        "allow-popups" => F::POPUPS,'''
+
+[[mutant]]
+name = "a token's case counts"
+file = "crates/protocol/src/sandbox.rs"
+from = '''    let flags = match token.to_ascii_lowercase().as_str() {'''
+to = '''    let flags = match token {'''
+
+[[mutant]]
+name = "tokens are split at spaces alone"
+file = "crates/protocol/src/sandbox.rs"
+from = '''        .split([' ', '\n', '\t', '\r', '\x0C'])'''
+to = '''        .split(' ')'''
+
+[[mutant]]
+name = "an invalid token is told twice"
+file = "crates/protocol/src/sandbox.rs"
+from = '''            None if !invalid.contains(&token) => invalid.push(token),'''
+to = '''            None if true => invalid.push(token),'''
+
+[[mutant]]
+name = "invalid tokens are told as one"
+file = "crates/protocol/src/sandbox.rs"
+from = '''        [one] => Some(format!("'{one}' is an invalid sandbox flag.")),'''
+to = '''        [one] => Some(format!("'{one}' are invalid sandbox flags.")),'''
+
+[[mutant]]
+name = "all the flags but the last"
+file = "crates/protocol/src/sandbox.rs"
+from = '''    pub const ALL: Self = Self((1 << 19) - 1);'''
+to = '''    pub const ALL: Self = Self((1 << 18) - 1);'''
+
+[[mutant]]
+name = "flags combine as the looser"
+file = "crates/protocol/src/sandbox.rs"
+from = '''        Self(self.0 | other.0)'''
+to = '''        Self(self.0 & other.0)'''
+
+[[mutant]]
+name = "a child frame isn't sandboxed by its parent"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        let sandbox = sandbox | node.sandbox;'''
+to = '''        let sandbox = sandbox | SandboxFlags::NONE;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]
+
+[[mutant]]
+name = "a sandboxed frame's initial about:blank is of its parent's origin"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        let origin = if sandbox.contains(SandboxFlags::ORIGIN) {
+            CommittedOrigin::opaque()'''
+to = '''        let origin = if false {
+            CommittedOrigin::opaque()'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]
+
+[[mutant]]
+name = "a frame's changed flags aren't its parent's too"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        node.pending_sandbox = sandbox | parent;'''
+to = '''        node.pending_sandbox = sandbox | SandboxFlags::NONE.union(SandboxFlags::from_bits(parent.bits() & 0));'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]
+
+[[mutant]]
+name = "a frame's document's flags stay as it was made"
+file = "crates/browser/src/frame_tree.rs"
+from = '''        node.sandbox = sandbox;'''
+to = '''        let _ = sandbox;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--lib", "frame_tree"]
+
+[[mutant]]
+name = "a sandboxed document commits of its URL's origin"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let origin = if sandbox.contains(protocol::sandbox::SandboxFlags::ORIGIN) {'''
+to = '''        let origin = if false {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_sandboxed_frames_document"]
+
+[[mutant]]
+name = "a navigation isn't sandboxed by its frame"
+file = "crates/browser/src/web_contents.rs"
+from = '''        let mut sandbox = self.frame_tree.pending_sandbox(frame);'''
+to = '''        let mut sandbox = protocol::sandbox::SandboxFlags::NONE;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_sandboxed_frames_document", "a_changed_sandbox"]
+
+[[mutant]]
+name = "a frame's changed flags aren't kept"
+file = "crates/browser/src/web_contents.rs"
+from = '''                if let Err(reason) = self.frame_tree.set_frame_policy(*frame, *sandbox) {'''
+to = '''                if let Err(reason) = self.frame_tree.set_frame_policy(*frame, protocol::sandbox::SandboxFlags::NONE) {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_changed_sandbox"]
+
+[[mutant]]
+name = "a frame's changed flags aren't told"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            .send(RendererHostMsg::DidChangeFramePolicy { frame, sandbox });'''
+to = '''            .send(RendererHostMsg::DidChangeFramePolicy { frame, sandbox: protocol::sandbox::SandboxFlags::NONE });'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_changed_sandbox"]
+
+[[mutant]]
+name = "a frame is made with no flags told"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            created_by_script,
+            sandbox,
+        });'''
+to = '''            created_by_script,
+            sandbox: protocol::sandbox::SandboxFlags::NONE,
+        });'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_sandboxed_frames_document"]
+
+[[mutant]]
+name = "a javascript: URL's document is sandboxed by none"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            None => self.document_sandbox(frame),'''
+to = '''            None => protocol::sandbox::SandboxFlags::NONE,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_sandboxed_frames_javascript"]
+
+[[mutant]]
+name = "a sandboxed document's javascript: URL runs"
+file = "crates/dom_api/src/history.rs"
+from = '''            (!crate::frame::scripting_disabled(cx, document)).then(|| {'''
+to = '''            (!cx.is_discarded(document)).then(|| {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_sandboxed_documents_javascript"]
+
+[[mutant]]
+name = "a sandboxed document's origin is its creator's"
+file = "crates/dom/src/frame.rs"
+from = '''            if self.has_opaque_origin(at) {
+                break;
+            }'''
+to = '''            if false {
+                break;
+            }'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_iframes_sandbox"]
+
+[[mutant]]
+name = "a sandboxed document's origin is its URL's"
+file = "crates/dom/src/frame.rs"
+from = '''            return Some(url::Origin::new_opaque());'''
+to = '''            let _ = url::Origin::new_opaque();'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_iframes_sandbox", "frames::scripting_is_disabled", "frames::a_document_sandboxed_so"]
+
+[[mutant]]
+name = "an initial about:blank sandboxed has its parent's token"
+file = "crates/dom_js/src/frames.rs"
+from = '''    let token = if opaque {
+        None
+    } else {'''
+to = '''    let token = if false {
+        None
+    } else {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_iframes_sandbox"]
+
+[[mutant]]
+name = "an iframe's own flags aren't told as its frame is made"
+file = "crates/dom_js/src/frames.rs"
+from = '''                    sandbox: own_sandbox,'''
+to = '''                    sandbox: dom_api::SandboxFlags::ALL,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_iframes_sandbox"]
+
+[[mutant]]
+name = "an iframe's changed flags aren't told"
+file = "crates/dom_api/src/frame.rs"
+from = '''                    host.frame_policy_changed(&owner, sandbox);'''
+to = '''                    let _ = (owner, sandbox);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_iframes_sandbox"]
+
+[[mutant]]
+name = "sandbox's DOMTokenList supports nothing"
+file = "crates/dom_api/src/token_list.rs"
+from = '''        return Ok(protocol::sandbox::is_token(token));'''
+to = '''        return Ok(token.is_empty());'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_iframes_sandbox"]
+
+[[mutant]]
+name = "scripts run in a document sandboxed without allow-scripts"
+file = "crates/dom_api/src/frame.rs"
+from = '''        || document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::SCRIPTS)'''
+to = '''        || document_sandbox(cx, document).contains(protocol::sandbox::SandboxFlags::SCRIPTS) && false'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::scripting_is_disabled"]
+
+[[mutant]]
+name = "a sandboxed document's noscript markup is text"
+file = "crates/dom_api/src/markup.rs"
+from = '''            .contains(protocol::sandbox::SandboxFlags::SCRIPTS)'''
+to = '''            .contains(protocol::sandbox::SandboxFlags::SCRIPTS)
+            && false'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::scripting_is_disabled"]
+
+[[mutant]]
+name = "an event handler compiles where scripting is disabled"
+file = "crates/dom_js/src/handlers.rs"
+from = '''            if dom_api::scripting_disabled(cx, owner_document) {'''
+to = '''            if dom_api::scripting_disabled(cx, owner_document) && false {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::scripting_is_disabled"]
+
+[[mutant]]
+name = "an opaque initial window is kept"
+file = "crates/dom_js/src/engine.rs"
+from = '''            && !self
+                .state()
+                .dom
+                .read(|cx| cx.has_opaque_origin(document.get(cx.gc)))'''
+to = '''            && !self
+                .state()
+                .dom
+                .read(|cx| cx.has_opaque_origin(document.get(cx.gc)) && false)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "frames::an_opaque_initial"]
+
+[[mutant]]
+name = "a sandboxed document keeps an initial window"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let document = self.create_window_reusing(frame, url, time_origin, !opaque)?;'''
+to = '''        let document = self.create_window_reusing(frame, url, time_origin, true)?;'''
+test = ["python3", "scripts/test.py", "wpt", "html/browsers/sandboxing/sandbox-parse-noscript.html", "html/interaction/focus/the-autofocus-attribute/no-sandboxed-automatic-features.html", "html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html", "html/browsers/sandboxing/sandbox-disallow-same-origin.html", "html/browsers/sandboxing/sandbox-new-execution-context.html", "html/browsers/sandboxing/sandbox-disallow-scripts.html"]
+
+[[mutant]]
+name = "a sandboxed document's realm keeps its token"
+file = "crates/dom_js/src/engine.rs"
+from = '''        if opaque {
+            self.give_opaque_token(frame);
+        }'''
+to = '''        if opaque && false {
+            self.give_opaque_token(frame);
+        }'''
+test = ["python3", "scripts/test.py", "wpt", "html/browsers/sandboxing/sandbox-parse-noscript.html", "html/interaction/focus/the-autofocus-attribute/no-sandboxed-automatic-features.html", "html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html", "html/browsers/sandboxing/sandbox-disallow-same-origin.html", "html/browsers/sandboxing/sandbox-new-execution-context.html", "html/browsers/sandboxing/sandbox-disallow-scripts.html"]
+
+[[mutant]]
+name = "a sandboxed document's parser runs scripts"
+file = "crates/dom_api/src/document_loader.rs"
+from = '''        let parser = Parser::with_scripting(dom, document, srcdoc, scripting);'''
+to = '''        let parser = Parser::with_scripting(dom, document, srcdoc, scripting || true);'''
+test = ["python3", "scripts/test.py", "wpt", "html/browsers/sandboxing/sandbox-parse-noscript.html", "html/interaction/focus/the-autofocus-attribute/no-sandboxed-automatic-features.html", "html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html", "html/browsers/sandboxing/sandbox-disallow-same-origin.html", "html/browsers/sandboxing/sandbox-new-execution-context.html", "html/browsers/sandboxing/sandbox-disallow-scripts.html"]
+
+[[mutant]]
+name = "the parser's scripting is always on"
+file = "crates/html/src/parser.rs"
+from = '''                ..opts(scripting_enabled, QuirksMode::NoQuirks).tree_builder'''
+to = '''                ..opts(true, QuirksMode::NoQuirks).tree_builder'''
+test = ["python3", "scripts/test.py", "wpt", "html/browsers/sandboxing/sandbox-parse-noscript.html", "html/interaction/focus/the-autofocus-attribute/no-sandboxed-automatic-features.html", "html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html", "html/browsers/sandboxing/sandbox-disallow-same-origin.html", "html/browsers/sandboxing/sandbox-new-execution-context.html", "html/browsers/sandboxing/sandbox-disallow-scripts.html"]
+
+[[mutant]]
+name = "a sandboxed document autofocuses"
+file = "crates/dom_api/src/focus.rs"
+from = '''                .contains(protocol::sandbox::SandboxFlags::AUTOMATIC_FEATURES)'''
+to = '''                .contains(protocol::sandbox::SandboxFlags::AUTOMATIC_FEATURES)
+                && false'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "a_sandboxed_document_doesnt_autofocus"]
+
+[[mutant]]
+name = "a lazy image is lazy where scripting is disabled"
+file = "crates/dom/src/image.rs"
+from = '''            && !self.scripts_sandboxed(document)'''
+to = '''            && !self.scripts_sandboxed(document) || self.is_lazy_image(element) && self.window_of(document).is_some()'''
+test = ["python3", "scripts/test.py", "wpt", "html/browsers/sandboxing/sandbox-parse-noscript.html", "html/interaction/focus/the-autofocus-attribute/no-sandboxed-automatic-features.html", "html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html", "html/browsers/sandboxing/sandbox-disallow-same-origin.html", "html/browsers/sandboxing/sandbox-new-execution-context.html", "html/browsers/sandboxing/sandbox-disallow-scripts.html"]
+
+[[mutant]]
+name = "the DOM isn't told scripting is disabled"
+file = "crates/dom_api/src/frame.rs"
+from = '''        flags.contains(SandboxFlags::SCRIPTS),
+    );'''
+to = '''        false,
+    );'''
+test = ["python3", "scripts/test.py", "wpt", "html/browsers/sandboxing/sandbox-parse-noscript.html", "html/interaction/focus/the-autofocus-attribute/no-sandboxed-automatic-features.html", "html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html", "html/browsers/sandboxing/sandbox-disallow-same-origin.html", "html/browsers/sandboxing/sandbox-new-execution-context.html", "html/browsers/sandboxing/sandbox-disallow-scripts.html"]

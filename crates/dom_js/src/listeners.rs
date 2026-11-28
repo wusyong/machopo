@@ -206,6 +206,10 @@ impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
         crate::frames::create_child(self.scope, owner)
     }
 
+    fn frame_policy_changed(&mut self, owner: &dom::NodeRoot, sandbox: dom_api::SandboxFlags) {
+        crate::frames::frame_policy_changed(self.scope, owner, sandbox);
+    }
+
     fn navigate_child(&mut self, owner: &dom::NodeRoot, navigation: dom_api::ChildNavigation) {
         if let Some(fragment) = crate::frames::navigate_child(self.scope, owner, navigation) {
             dom_api::navigate_child_to_fragment(self, owner, &fragment);

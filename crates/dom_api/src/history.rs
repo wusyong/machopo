@@ -139,14 +139,17 @@ pub(crate) fn navigate<'gc>(
 /// `document`'s `javascript:` URLs run, in order, each the rest of the URL
 /// percent-decoded run as a classic script of the document, its base URL
 /// the document's (HTML's "evaluate a javascript: URL"; Blink's
-/// `Document::ExecuteJavaScriptUrls`), till one takes its frame away. Its
+/// `Document::ExecuteJavaScriptUrls`), till one takes its frame away, or
+/// none where scripting is disabled. Its
 /// load waited for none of them (what would unblock it checks it itself),
 /// so none is checked here. A result that is a string doesn't replace it.
 pub(crate) fn run_javascript_urls<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
     for url in host.mutate(|cx| cx.take_javascript_urls(document.get(cx.gc))) {
+        // Not where scripting is disabled (HTML's "evaluate a javascript:
+        // URL": a document sandboxed without `allow-scripts` runs none).
         let Some((document_url, base_url)) = host.read(|cx| {
             let document = document.get(cx.gc);
-            (!cx.is_discarded(document)).then(|| {
+            (!crate::frame::scripting_disabled(cx, document)).then(|| {
                 (
                     cx.document_url(document)
                         .map(|url| url.to_string())

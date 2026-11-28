@@ -1044,6 +1044,9 @@ pub(crate) struct CommitParams {
     /// The main frame's page before may stay shown till it is drawn
     /// (`CommitNavigation`'s `paint_holding`).
     paint_holding: bool,
+    /// What the document is sandboxed by: its frame's pending flags as the
+    /// navigation started (Chromium's `commit_params_->frame_policy`).
+    sandbox_flags: protocol::sandbox::SandboxFlags,
 }
 
 /// A navigation's document as it commits.
@@ -1123,6 +1126,7 @@ impl CommitParams {
         history: HistoryEntryParams,
         navigation_start: ipc::TimeTicks,
         navigation_type: FrameLoadType,
+        sandbox_flags: protocol::sandbox::SandboxFlags,
     ) -> Self {
         Self {
             frame,
@@ -1131,7 +1135,13 @@ impl CommitParams {
             navigation_start,
             navigation_type,
             paint_holding: true,
+            sandbox_flags,
         }
+    }
+
+    /// What the document is sandboxed by.
+    pub(crate) fn sandbox_flags(&self) -> protocol::sandbox::SandboxFlags {
+        self.sandbox_flags
     }
 
     /// Where its entry is in the session history as it commits, and how
@@ -1183,6 +1193,7 @@ impl RenderProcessHost {
             loaded: document.loaded.map(Box::new),
             navigation_type: params.navigation_type,
             paint_holding: params.paint_holding,
+            sandbox_flags: params.sandbox_flags,
         });
         completer
     }

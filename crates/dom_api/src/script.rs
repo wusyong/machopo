@@ -112,10 +112,7 @@ pub fn prepare_wasm_script<'gc>(cx: &Cx<'_, 'gc>, script: NodeRef<'gc>) -> Prepa
     });
     let document = cx.document_of(script);
     let Some(src) = attr(names::local::SRC).filter(|_| {
-        is_wasm
-            && cx.is_connected(script)
-            && cx.window_of(document).is_some()
-            && !cx.is_discarded(document)
+        is_wasm && cx.is_connected(script) && !crate::frame::scripting_disabled(cx, document)
     }) else {
         // As a script of a type that isn't run: the parser's flag goes.
         flags.parser_inserted = false;
@@ -181,9 +178,10 @@ fn prepare_with<'gc>(cx: &Cx<'_, 'gc>, script: NodeRef<'gc>, flags: &mut ScriptF
         flags.non_blocking = false;
     }
     flags.already_started = true;
-    // Scripting is disabled for a document shown in no browsing context.
+    // Scripting is disabled for a document shown in no browsing context,
+    // or sandboxed without `allow-scripts`.
     let document = cx.document_of(script);
-    if cx.window_of(document).is_none() || cx.is_discarded(document) {
+    if crate::frame::scripting_disabled(cx, document) {
         return Prepared::Nothing;
     }
     // A browser that runs modules leaves the fallback for those that

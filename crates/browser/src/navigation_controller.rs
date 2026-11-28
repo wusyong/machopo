@@ -1313,10 +1313,30 @@ mod tests {
     /// A tree of the main frame with child frames 1 and 2, and 3 in 1.
     fn frames() -> FrameTree {
         let mut tree = FrameTree::new(MAIN);
-        tree.add_child(MAIN, token(1), "one", false).expect("made");
-        tree.add_child(MAIN, token(2), "two", false).expect("made");
-        tree.add_child(token(1), token(3), "three", false)
-            .expect("made");
+        tree.add_child(
+            MAIN,
+            token(1),
+            "one",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .expect("made");
+        tree.add_child(
+            MAIN,
+            token(2),
+            "two",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .expect("made");
+        tree.add_child(
+            token(1),
+            token(3),
+            "three",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .expect("made");
         tree
     }
 
@@ -1366,10 +1386,22 @@ mod tests {
         assert_eq!(controller.entry(0).map(|e| e.frame_count()), Some(4));
         assert_eq!(child_url(&controller, 0, "three"), Some("three"));
         // A frame whose parent has no place: none.
-        tree.add_child(token(2), token(4), "four", false)
-            .expect("made");
-        tree.add_child(token(4), token(5), "five", false)
-            .expect("made");
+        tree.add_child(
+            token(2),
+            token(4),
+            "four",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .expect("made");
+        tree.add_child(
+            token(4),
+            token(5),
+            "five",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .expect("made");
         commit_child(
             &mut controller,
             &tree,

@@ -317,14 +317,34 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
     let created_by_script = v8::StackTrace::current_stack_trace(scope.scope(), 1)
         .is_some_and(|stack| stack.get_frame_count() > 0);
     let context = create_window_realm(scope.scope(), "about:blank", None);
-    // Its initial `about:blank`'s origin, its parent's.
-    let token = {
+    // Sandboxed by its iframe's flags and its parent's document's, its
+    // initial `about:blank` too (the browser adds the parent's to what it
+    // is told: the iframe's alone).
+    let (own_sandbox, sandbox) = {
+        let (state, _) = scope.state();
+        state.dom.read(|cx| {
+            let owner = owner.get(cx.gc);
+            let own = dom_api::iframe_sandbox(cx, owner);
+            (
+                own,
+                own | dom_api::document_sandbox(cx, cx.document_of(owner)),
+            )
+        })
+    };
+    let opaque = sandbox.contains(dom_api::SandboxFlags::ORIGIN);
+    // Its initial `about:blank`'s origin, its parent's; a new opaque one
+    // sandboxed so.
+    let token = if opaque {
+        None
+    } else {
         let (state, _) = scope.state();
         state.frames.get(parent).map(|frame| frame.context.clone())
     }
     .map(|parent| v8::Local::new(scope.scope(), parent).get_security_token(scope.scope()));
-    if let Some(token) = token {
-        context.set_security_token(token);
+    match token {
+        Some(token) => context.set_security_token(token),
+        None if opaque => set_origin_token(scope, context, None),
+        None => {}
     }
     let global = v8::Global::new(scope.scope(), context);
     let (document, document_id) = window_document(scope, context);
@@ -355,11 +375,14 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
             (state.frames.token(parent), &mut state.frames.client)
         {
             client.child_frame_created(
-                parent_token,
-                token,
-                &name,
-                created_by_script,
-                stack.as_deref(),
+                &dom_api::ChildFrameMade {
+                    parent: parent_token,
+                    frame: token,
+                    name: &name,
+                    created_by_script,
+                    stack: stack.as_deref(),
+                    sandbox: own_sandbox,
+                },
                 &state.dom,
             );
         }
@@ -384,6 +407,7 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
         // Its page's visibility too.
         cx.set_page_hidden(window, parent.is_some_and(|parent| cx.page_hidden(parent)));
         cx.set_initial_about_blank(document.get(cx.gc));
+        dom_api::set_document_sandbox(cx, document.get(cx.gc), sandbox);
     });
     state.frames.set(Frame {
         token: Some(token),
@@ -418,6 +442,29 @@ pub(crate) fn create_child(scope: &mut Scope<'_, '_, '_>, owner: &NodeRoot) -> O
 /// nowhere (`NavigationHere`): a `javascript:` URL's commit its host's
 /// (`FrameClient::commit_here`); a fragment's URL, given back for the
 /// caller to go to (`dom_api::navigate_child_to_fragment`).
+/// `owner`'s iframe's `sandbox` flags are `sandbox` now: the host told
+/// of its frame, if it has one.
+pub(crate) fn frame_policy_changed(
+    scope: &mut Scope<'_, '_, '_>,
+    owner: &NodeRoot,
+    sandbox: dom_api::SandboxFlags,
+) {
+    let (state, _) = scope.state_mut();
+    let document = state.dom.read(|cx| {
+        cx.content_document(owner.get(cx.gc))
+            .map(|document| cx.node_id(document))
+    });
+    let Some(id) = document
+        .and_then(|document| state.frames.of_document(document))
+        .map(|frame| frame.id)
+    else {
+        return;
+    };
+    if let (Some(token), Some(client)) = (state.frames.token(id), &mut state.frames.client) {
+        client.frame_policy_changed(token, sandbox);
+    }
+}
+
 pub(crate) fn navigate_child(
     scope: &mut Scope<'_, '_, '_>,
     owner: &NodeRoot,

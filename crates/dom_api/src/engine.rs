@@ -145,22 +145,23 @@ pub enum DocumentLifecycle {
 /// browser starts a navigation as script asks for it.
 /// Frames are named by their tokens, the browser's names for them.
 pub trait FrameClient {
-    /// Child frame `frame` made for an iframe in the frame `parent`, its
-    /// iframe's name `name`; `created_by_script` if script was running
-    /// (Blink's `is_created_by_script`), `stack` that script's if the DOM
-    /// wants frames' stacks (`Dom::frame_stacks_wanted`). Before its realm
-    /// is (as Blink's `LocalFrame` constructor tells DevTools, before the
-    /// frame's context comes); `dom` as it is then, for what DevTools has
-    /// queued of it to go first.
-    fn child_frame_created(
+    /// Child frame `made.frame` made for an iframe (`ChildFrameMade`).
+    /// Before its realm is (as Blink's `LocalFrame` constructor tells
+    /// DevTools, before the frame's context comes); `dom` as it is then,
+    /// for what DevTools has queued of it to go first.
+    fn child_frame_created(&mut self, made: &ChildFrameMade<'_>, dom: &dom::Dom);
+
+    /// Child frame `frame`'s iframe's `sandbox` flags are `sandbox` now
+    /// (Blink's `LocalFrameClient`'s frame policy changing, which content
+    /// tells the browser as `DidChangeFramePolicy`): for its next
+    /// navigation. Nothing by default.
+    fn frame_policy_changed(
         &mut self,
-        parent: crate::FrameToken,
         frame: crate::FrameToken,
-        name: &str,
-        created_by_script: bool,
-        stack: Option<&str>,
-        dom: &dom::Dom,
-    );
+        sandbox: protocol::sandbox::SandboxFlags,
+    ) {
+        let _ = (frame, sandbox);
+    }
 
     /// Child frame `frame` has its new document `document`, a navigation's
     /// (`ScriptEngine::create_window`): before its realm is told to the
@@ -228,6 +229,24 @@ pub trait FrameClient {
     fn commit_here(&mut self, frame: crate::FrameToken) {
         let _ = frame;
     }
+}
+
+/// A child frame made for an iframe, as the engine tells its host's
+/// `FrameClient::child_frame_created`.
+#[derive(Debug, Clone, Copy)]
+pub struct ChildFrameMade<'a> {
+    /// The frame, and the frame its iframe is in: their tokens.
+    pub parent: crate::FrameToken,
+    pub frame: crate::FrameToken,
+    /// Its iframe's name then.
+    pub name: &'a str,
+    /// Script was running (Blink's `is_created_by_script`).
+    pub created_by_script: bool,
+    /// That script's stack, if the DOM wants frames' stacks
+    /// (`Dom::frame_stacks_wanted`).
+    pub stack: Option<&'a str>,
+    /// Its iframe's `sandbox` flags then (its own, not its parent's).
+    pub sandbox: protocol::sandbox::SandboxFlags,
 }
 
 /// An iframe's navigation of its frame, as the engine tells its host's
@@ -486,6 +505,26 @@ pub trait ScriptEngine: ParserHost {
         url: &str,
         time_origin: Instant,
     ) -> Option<NodeRoot>;
+
+    /// `create_window`, the document sandboxed by `flags` as its host
+    /// committed it, before it is parsed or any of its script runs: with
+    /// the origin flag its origin is a new opaque one, so it takes no
+    /// initial `about:blank`'s window (HTML keeps that window for a
+    /// document of its origin alone). The DOM's by default; an engine
+    /// whose realms have their own say (V8's security tokens, its windows)
+    /// has them follow.
+    fn create_sandboxed_window(
+        &mut self,
+        frame: crate::FrameId,
+        url: &str,
+        time_origin: Instant,
+        flags: protocol::sandbox::SandboxFlags,
+    ) -> Option<NodeRoot> {
+        let document = self.create_window(frame, url, time_origin)?;
+        self.dom_mut()
+            .mutate(|cx| crate::frame::set_document_sandbox(cx, document.get(cx.gc), flags));
+        Some(document)
+    }
 
     /// `document`, `frame`'s, just made (`create_window`), has its origin
     /// from `source` (HTML's: an `about:blank` its initiator navigated it

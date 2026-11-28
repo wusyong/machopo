@@ -179,6 +179,8 @@ pub(super) struct ChildCommit<'a> {
     pub(super) history: protocol::renderer::HistoryEntryParams,
     /// The loader the browser gave it.
     pub(super) loader: u64,
+    /// What it is sandboxed by, as the browser worked it out.
+    pub(super) sandbox: protocol::sandbox::SandboxFlags,
 }
 
 /// A committed document's content type (its MIME type's essence: the
@@ -336,6 +338,7 @@ impl RenderThread {
         timing: &crate::navigation_timing::NavigationTiming,
         loader: u64,
         bypass_cache: bool,
+        sandbox: protocol::sandbox::SandboxFlags,
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
         let document_id = crate::frame_view::next_document_id();
@@ -418,8 +421,10 @@ impl RenderThread {
             previous.as_ref(),
             &document_url,
         );
+        // Sandboxed before it is parsed (`<noscript>`) or any of its
+        // script runs.
         let document = engine
-            .create_window(top, document_url.as_str(), origin)
+            .create_sandboxed_window(top, document_url.as_str(), origin, sandbox)
             .expect("the top-level frame is the engine's");
         // Its loading: its body decoded as its start says, and parsed.
         let loading = dom_api::DocumentLoader::new(
@@ -738,6 +743,19 @@ impl RenderThread {
             url.and_then(|url| Url::parse(&url).ok())
                 .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank")),
         )
+    }
+
+    /// What `frame`'s document is sandboxed by: none without one.
+    fn document_sandbox(&mut self, frame: FrameId) -> protocol::sandbox::SandboxFlags {
+        let Some(document) = self.doc(frame).map(|doc| doc.document.clone()) else {
+            return protocol::sandbox::SandboxFlags::NONE;
+        };
+        let Some(engine) = self.engine.as_mut() else {
+            return protocol::sandbox::SandboxFlags::NONE;
+        };
+        engine
+            .dom_mut()
+            .read(|cx| dom_api::document_sandbox(cx, document.get(cx.gc)))
     }
 
     /// The top-level frame's document's URL (`document_url`).
@@ -1194,6 +1212,13 @@ impl RenderThread {
             }
         };
         let previous = self.document_url(frame);
+        // What it is sandboxed by: the browser's say; a document the
+        // renderer commits itself (a `javascript:` URL's), as the one it
+        // replaces.
+        let sandbox = match &navigation {
+            Some(navigation) => navigation.sandbox,
+            None => self.document_sandbox(frame),
+        };
         // DevTools hears of the new document as the engine makes it, before
         // its realm (`PageAgent::child_document_created`).
         if !self.devtools_sessions.is_empty()
@@ -1216,7 +1241,10 @@ impl RenderThread {
             .map(|(start, end)| (clock.at(start), clock.at(end)));
         let timing =
             crate::navigation_timing::with_unload(timing, unloaded, previous.as_ref(), &url);
-        let Some(document) = engine.create_window(frame, url.as_str(), now) else {
+        // Sandboxed before it is parsed (`<noscript>`) or any of its
+        // script runs, in a window of its own if of an opaque origin.
+        let Some(document) = engine.create_sandboxed_window(frame, url.as_str(), now, sandbox)
+        else {
             return;
         };
         // Its loading: its body decoded as its start says, and parsed (an
@@ -3560,6 +3588,16 @@ impl dom_api::FrameClient for RendererFrameClient {
         }
     }
 
+    fn frame_policy_changed(
+        &mut self,
+        frame: protocol::FrameToken,
+        sandbox: protocol::sandbox::SandboxFlags,
+    ) {
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::DidChangeFramePolicy { frame, sandbox });
+    }
+
     fn frame_detached(&mut self, frame: protocol::FrameToken) {
         let _ = self
             .to_browser
@@ -3567,20 +3605,21 @@ impl dom_api::FrameClient for RendererFrameClient {
         self.page_agent.frame_detached(&frame.to_string());
     }
 
-    fn child_frame_created(
-        &mut self,
-        parent: protocol::FrameToken,
-        frame: protocol::FrameToken,
-        name: &str,
-        created_by_script: bool,
-        stack: Option<&str>,
-        dom: &dom::Dom,
-    ) {
+    fn child_frame_created(&mut self, made: &dom_api::ChildFrameMade<'_>, dom: &dom::Dom) {
+        let dom_api::ChildFrameMade {
+            parent,
+            frame,
+            name,
+            created_by_script,
+            stack,
+            sandbox,
+        } = *made;
         let _ = self.to_browser.send(RendererHostMsg::DidCreateChildFrame {
             parent,
             frame,
             name: name.to_owned(),
             created_by_script,
+            sandbox,
         });
         // DevTools' queued events first (its iframe's `childNodeInserted`),
         // as Blink's `frameAttached` flushes the session's queue.

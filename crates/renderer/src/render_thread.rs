@@ -1157,6 +1157,7 @@ impl RenderThread {
             loaded,
             navigation_type,
             paint_holding,
+            sandbox_flags,
         } = commit;
         let time_origin = self
             .clock
@@ -1211,6 +1212,7 @@ impl RenderThread {
                 timing,
                 loader,
                 bypass_cache,
+                sandbox_flags,
             )
         } else {
             let Ok(document_url) = Url::parse(&document_url) else {
@@ -1235,6 +1237,7 @@ impl RenderThread {
                     origin_source: None,
                     history,
                     loader,
+                    sandbox: sandbox_flags,
                 },
             )
         };
@@ -1273,6 +1276,7 @@ impl RenderThread {
                 loaded,
                 navigation_type,
                 paint_holding,
+                sandbox_flags,
             } => {
                 let commit = document_body::NavigationCommit {
                     frame,
@@ -1289,6 +1293,7 @@ impl RenderThread {
                     loaded,
                     navigation_type,
                     paint_holding,
+                    sandbox_flags,
                 };
                 self.commit_navigation_body(commit, body.into_bytes(), body_pipe);
             }
@@ -1540,6 +1545,7 @@ impl RenderThread {
         timing: NavigationTiming,
         loader: u64,
         bypass_cache: bool,
+        sandbox: protocol::sandbox::SandboxFlags,
     ) -> bool {
         if self
             .render_frames
@@ -1567,6 +1573,7 @@ impl RenderThread {
             &timing,
             loader,
             bypass_cache,
+            sandbox,
         );
         true
     }

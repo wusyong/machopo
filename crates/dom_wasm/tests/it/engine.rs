@@ -514,16 +514,7 @@ fn an_events_handle_in_the_guests_own_dispatch_is_its_for_the_call_only() {
 struct Navigations(Rc<RefCell<Vec<String>>>);
 
 impl dom_api::FrameClient for Navigations {
-    fn child_frame_created(
-        &mut self,
-        _: dom_api::FrameToken,
-        _: dom_api::FrameToken,
-        _: &str,
-        _: bool,
-        _: Option<&str>,
-        _: &dom::Dom,
-    ) {
-    }
+    fn child_frame_created(&mut self, _: &dom_api::ChildFrameMade<'_>, _: &dom::Dom) {}
 
     fn child_document_created(&mut self, _: dom_api::FrameToken, _: dom::NodeId) {}
 

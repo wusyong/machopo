@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use protocol::FrameToken;
+use protocol::sandbox::SandboxFlags;
 use site::{Site, SiteForCookies, StorageKey};
 
 use crate::bad_message::BadMessageReason;
@@ -59,6 +60,13 @@ struct FrameTreeNode {
     /// Its iframe's `srcdoc`, as the renderer last told
     /// (`DidChangeSrcDoc`): what its `about:srcdoc` documents are.
     srcdoc: String,
+    /// What its next document is sandboxed by (Chromium's
+    /// `pending_frame_policy_`): its iframe's `sandbox` flags as the
+    /// renderer last told, with its parent's document's.
+    pending_sandbox: SandboxFlags,
+    /// What its document is sandboxed by, as it last committed one (its
+    /// initial `about:blank`: `pending_sandbox` as it was made).
+    sandbox: SandboxFlags,
     /// The navigations the browser sent the renderer to commit and it
     /// hasn't reported committing, oldest first (Chromium's
     /// `navigation_requests_`): a commit reported is one of them.
@@ -75,6 +83,7 @@ struct Committing {
     navigation_id: u64,
     url: String,
     origin: CommittedOrigin,
+    sandbox: SandboxFlags,
 }
 
 /// The frame isn't in the tree: it went.
@@ -126,6 +135,8 @@ impl FrameTreeNode {
             storage_key,
             local: origin.local,
             srcdoc: String::new(),
+            pending_sandbox: SandboxFlags::NONE,
+            sandbox: SandboxFlags::NONE,
             committing: Vec::new(),
             navigation: None,
             document_load: None,
@@ -365,6 +376,47 @@ impl FrameTree {
         }
     }
 
+    /// `frame`'s iframe's `sandbox` flags are `sandbox` now
+    /// (`DidChangeFramePolicy`; Chromium's `SetPendingFramePolicy`): with
+    /// its parent's document's, what its next document is sandboxed by. A
+    /// frame the tree doesn't have, or the main frame (which has no
+    /// iframe), is a bad message.
+    pub(crate) fn set_frame_policy(
+        &mut self,
+        frame: FrameToken,
+        sandbox: SandboxFlags,
+    ) -> Result<(), BadMessageReason> {
+        let parent = self
+            .nodes
+            .get(&frame)
+            .and_then(|node| node.parent)
+            .and_then(|parent| self.nodes.get(&parent))
+            .ok_or(BadMessageReason::FramePolicyOfUnknownFrame)?
+            .sandbox;
+        let node = self
+            .nodes
+            .get_mut(&frame)
+            .ok_or(BadMessageReason::FramePolicyOfUnknownFrame)?;
+        node.pending_sandbox = sandbox | parent;
+        Ok(())
+    }
+
+    /// What `frame`'s next document is sandboxed by (its pending flags);
+    /// none for a frame the tree doesn't have.
+    pub(crate) fn pending_sandbox(&self, frame: FrameToken) -> SandboxFlags {
+        self.nodes
+            .get(&frame)
+            .map_or(SandboxFlags::NONE, |node| node.pending_sandbox)
+    }
+
+    /// What `frame`'s document is sandboxed by, as it last committed; none
+    /// for a frame the tree doesn't have.
+    pub(crate) fn sandbox(&self, frame: FrameToken) -> SandboxFlags {
+        self.nodes
+            .get(&frame)
+            .map_or(SandboxFlags::NONE, |node| node.sandbox)
+    }
+
     /// `frame`'s navigation on its way.
     pub(crate) fn navigation(&self, frame: FrameToken) -> Option<&NavigationRequest> {
         self.nodes.get(&frame)?.navigation.as_ref()
@@ -443,21 +495,23 @@ impl FrameTree {
     }
 
     /// The browser sends `frame` navigation `navigation_id`'s document to
-    /// commit, at `url` (a failed one's, for an error page), of `origin`:
-    /// as the renderer reports it committed (`did_commit`), it is the
-    /// frame's.
+    /// commit, at `url` (a failed one's, for an error page), of `origin`,
+    /// sandboxed by `sandbox`: as the renderer reports it committed
+    /// (`did_commit`), it is the frame's.
     pub(crate) fn committing(
         &mut self,
         frame: FrameToken,
         navigation_id: u64,
         url: &str,
         origin: CommittedOrigin,
+        sandbox: SandboxFlags,
     ) {
         if let Some(node) = self.nodes.get_mut(&frame) {
             node.committing.push(Committing {
                 navigation_id,
                 url: url.to_owned(),
                 origin,
+                sandbox,
             });
         }
     }
@@ -513,7 +567,9 @@ impl FrameTree {
             if node.parent.is_none() || !javascript {
                 return Err(BadMessageReason::CommitOfNoNavigation);
             }
-            CommittedOrigin::opaque()
+            // A `javascript:` URL's document is sandboxed as the one it
+            // replaces.
+            (CommittedOrigin::opaque(), node.sandbox)
         } else {
             let Some(at) = node
                 .committing
@@ -530,8 +586,9 @@ impl FrameTree {
             let Some(sent) = node.committing.drain(..=at).next_back() else {
                 return Err(BadMessageReason::CommitOfNoNavigation);
             };
-            sent.origin
+            (sent.origin, sent.sandbox)
         };
+        let (origin, sandbox) = origin;
         let parent = node.parent;
         let storage_key = self.storage_key_in(parent, &origin.origin);
         let Some(node) = self.nodes.get_mut(&frame) else {
@@ -540,6 +597,7 @@ impl FrameTree {
         node.origin = origin.origin;
         node.storage_key = storage_key;
         node.local = origin.local;
+        node.sandbox = sandbox;
         node.url = Some(url.to_owned());
         node.committed_real_load |= crate::loader::about_path(url) != Some("blank");
         Ok(())
@@ -591,6 +649,7 @@ impl FrameTree {
         frame: FrameToken,
         name: &str,
         created_by_script: bool,
+        sandbox: SandboxFlags,
     ) -> Result<(), BadMessageReason> {
         if self.nodes.contains_key(&frame) {
             return Err(BadMessageReason::FrameTokenInUse);
@@ -608,11 +667,19 @@ impl FrameTree {
             origin: node.origin.clone(),
             local: node.local,
         };
+        // Sandboxed by its iframe's flags and its parent's, its initial
+        // `about:blank` too (whose origin is then an opaque one).
+        let sandbox = sandbox | node.sandbox;
+        let origin = if sandbox.contains(SandboxFlags::ORIGIN) {
+            CommittedOrigin::opaque()
+        } else {
+            origin
+        };
         let storage_key = self.storage_key_in(Some(parent), &origin.origin);
-        self.nodes.insert(
-            frame,
-            FrameTreeNode::new(Some(parent), unique_name, origin, storage_key),
-        );
+        let mut child = FrameTreeNode::new(Some(parent), unique_name, origin, storage_key);
+        child.pending_sandbox = sandbox;
+        child.sandbox = sandbox;
+        self.nodes.insert(frame, child);
         Ok(())
     }
 
@@ -696,8 +763,64 @@ mod tests {
             origin: url::Url::parse(url).unwrap().origin(),
             local: false,
         };
-        tree.committing(frame, id, url, origin);
+        tree.committing(
+            frame,
+            id,
+            url,
+            origin,
+            protocol::sandbox::SandboxFlags::NONE,
+        );
         tree.did_commit(frame, id, url).unwrap();
+    }
+
+    /// A child frame's sandbox flags are its iframe's with its parent's
+    /// document's, as it is made (its initial `about:blank` of an opaque
+    /// origin with the origin flag) and as its iframe's change, for its
+    /// next document; the parent's count as its document committed them.
+    /// The main frame's are no iframe's: changing them is a bad message.
+    #[test]
+    fn a_frames_sandbox_flags_are_its_iframes_and_its_parents() {
+        use protocol::sandbox::{SandboxFlags, parse};
+        let mut tree = FrameTree::new(token(0));
+        commit_at(&mut tree, token(0), 1, "https://a.example/");
+        let scripts = parse("allow-same-origin").flags;
+        tree.add_child(token(0), token(1), "", false, SandboxFlags::NONE)
+            .unwrap();
+        assert_eq!(tree.sandbox(token(1)), SandboxFlags::NONE);
+        assert!(tree.origin(token(1)).unwrap().is_tuple());
+        let all = parse("").flags;
+        tree.add_child(token(0), token(2), "", false, all).unwrap();
+        assert!(!tree.origin(token(2)).unwrap().is_tuple());
+        // Its own document's, as it committed; then its child's.
+        tree.committing(
+            token(1),
+            2,
+            "https://a.example/child",
+            CommittedOrigin {
+                origin: url::Url::parse("https://a.example/").unwrap().origin(),
+                local: false,
+            },
+            scripts,
+        );
+        tree.did_commit(token(1), 2, "https://a.example/child")
+            .unwrap();
+        tree.add_child(token(1), token(3), "", false, SandboxFlags::NONE)
+            .unwrap();
+        assert_eq!(tree.sandbox(token(3)), scripts);
+        let forms = parse("allow-same-origin allow-scripts").flags;
+        tree.set_frame_policy(token(3), forms).unwrap();
+        assert_eq!(tree.pending_sandbox(token(3)), forms | scripts);
+        assert_eq!(tree.sandbox(token(3)), scripts, "the next document's");
+        tree.set_frame_policy(token(1), SandboxFlags::NONE).unwrap();
+        assert_eq!(tree.pending_sandbox(token(1)), SandboxFlags::NONE);
+        assert_eq!(
+            tree.set_frame_policy(token(0), all),
+            Err(BadMessageReason::FramePolicyOfUnknownFrame)
+        );
+        assert_eq!(
+            tree.set_frame_policy(token(9), all),
+            Err(BadMessageReason::FramePolicyOfUnknownFrame)
+        );
     }
 
     /// Each frame's storage key is worked out as its document commits, and
@@ -714,20 +837,41 @@ mod tests {
             main,
             StorageKey::first_party(&url::Url::parse("https://a.example/").unwrap().origin())
         );
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert_eq!(tree.storage_key(token(1)), Some(&main));
         commit_at(&mut tree, token(1), 2, "https://b.example/");
         let child = tree.storage_key(token(1)).unwrap();
         assert!(child.is_third_party());
         assert_eq!(child.top_level_site(), main.top_level_site());
         // `a.example` again, in `b.example`: a third party's.
-        tree.add_child(token(1), token(2), "", false).unwrap();
+        tree.add_child(
+            token(1),
+            token(2),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         commit_at(&mut tree, token(2), 3, "https://www.a.example/");
         let grandchild = tree.storage_key(token(2)).unwrap();
         assert!(grandchild.is_third_party());
         assert_eq!(grandchild.top_level_site(), main.top_level_site());
         // Of the main frame's site, in it directly: first party.
-        tree.add_child(token(0), token(3), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(3),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         commit_at(&mut tree, token(3), 4, "https://www.a.example/");
         assert!(!tree.storage_key(token(3)).unwrap().is_third_party());
         assert_eq!(tree.storage_key(token(9)), None);
@@ -760,7 +904,14 @@ mod tests {
             Some("https://www.a.example")
         );
         assert!(!main.trusted.is_main_frame_navigation);
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert_eq!(
             sites(&tree.loader_params(token(1), &origin("https://sub.a.example/"))),
             (a(), a())
@@ -775,7 +926,14 @@ mod tests {
         assert_eq!(main.trusted.frame_site, a());
         // `a.example` in `b.example` in `a.example`: no site's first party.
         commit_at(&mut tree, token(1), 2, "https://b.example/");
-        tree.add_child(token(1), token(2), "", false).unwrap();
+        tree.add_child(
+            token(1),
+            token(2),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         let below = tree.loader_params(token(2), &origin("https://a.example/"));
         assert_eq!(below.trusted.site_for_cookies, None);
         // An opaque top-level frame: no site; its initiator `null`.
@@ -799,7 +957,14 @@ mod tests {
         assert_eq!(main.initiator, None);
         assert!(main.is_main_frame_navigation);
         assert_eq!(main.frame_site, None);
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         commit_at(&mut tree, token(1), 2, "https://c.example/");
         let asked = tree.navigation_params(token(0), "https://b.example/", Some(token(1)));
         assert_eq!(asked.initiator.as_deref(), Some("https://c.example"));
@@ -819,10 +984,38 @@ mod tests {
         let mut tree = FrameTree::new(token(0));
         assert_eq!(tree.root(), token(0));
         assert_eq!(tree.len(), 1);
-        tree.add_child(token(0), token(1), "", false).unwrap();
-        tree.add_child(token(0), token(2), "", false).unwrap();
-        tree.add_child(token(1), token(3), "", false).unwrap();
-        tree.add_child(token(3), token(4), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
+        tree.add_child(
+            token(0),
+            token(2),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
+        tree.add_child(
+            token(1),
+            token(3),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
+        tree.add_child(
+            token(3),
+            token(4),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert_eq!(tree.children(token(0)), [token(1), token(2)]);
         assert_eq!(tree.children(token(1)), [token(3)]);
         assert_eq!(tree.parent(token(4)), Some(token(3)));
@@ -835,7 +1028,14 @@ mod tests {
         }
         assert_eq!(tree.len(), 2);
         // Gone, its token may be made again.
-        tree.add_child(token(2), token(1), "", false).unwrap();
+        tree.add_child(
+            token(2),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert_eq!(tree.parent(token(1)), Some(token(2)));
         tree.reset();
         assert_eq!(tree.len(), 1);
@@ -855,15 +1055,34 @@ mod tests {
             origin: url::Url::parse("file:///a.html").unwrap().origin(),
             local: true,
         };
-        tree.committing(token(0), 1, "file:///a.html", local);
+        tree.committing(
+            token(0),
+            1,
+            "file:///a.html",
+            local,
+            protocol::sandbox::SandboxFlags::NONE,
+        );
         tree.did_commit(token(0), 1, "file:///a.html").unwrap();
         assert_eq!(tree.url(token(0)), Some("file:///a.html"));
         assert!(tree.may_open_local_files(token(0)));
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert!(tree.may_open_local_files(token(1)), "its parent's");
         assert_eq!(tree.url(token(1)), None);
         let parents = tree.committed_origin(token(0)).unwrap();
-        tree.committing(token(1), 2, "file:///b.html", parents);
+        tree.committing(
+            token(1),
+            2,
+            "file:///b.html",
+            parents,
+            protocol::sandbox::SandboxFlags::NONE,
+        );
         tree.did_commit(token(1), 2, "file:///b.html").unwrap();
         assert!(tree.may_open_local_files(token(1)), "as sent");
         let web = url::Url::parse("https://a.test/").unwrap().origin();
@@ -871,12 +1090,25 @@ mod tests {
             origin: web.clone(),
             local: false,
         };
-        tree.committing(token(0), 4, "https://a.test/", committed);
+        tree.committing(
+            token(0),
+            4,
+            "https://a.test/",
+            committed,
+            protocol::sandbox::SandboxFlags::NONE,
+        );
         tree.did_commit(token(0), 4, "https://a.test/").unwrap();
         assert!(!tree.may_open_local_files(token(0)));
         assert_eq!(tree.origin(token(0)), Some(&web));
         assert_ne!(tree.origin(token(1)), Some(&web), "a local file's");
-        tree.add_child(token(0), token(2), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(2),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert!(!tree.may_open_local_files(token(2)), "its parent's");
         assert_eq!(tree.origin(token(2)), Some(&web), "its parent's");
         // Its iframe's `srcdoc`, a child frame's alone.
@@ -912,13 +1144,32 @@ mod tests {
     #[test]
     fn a_commit_is_one_the_browser_sent() {
         let mut tree = FrameTree::new(token(0));
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         let web = |url: &str| CommittedOrigin {
             origin: url::Url::parse(url).unwrap().origin(),
             local: false,
         };
-        tree.committing(token(0), 1, "https://a.test/", web("https://a.test/"));
-        tree.committing(token(0), 2, "https://b.test/", web("https://b.test/"));
+        tree.committing(
+            token(0),
+            1,
+            "https://a.test/",
+            web("https://a.test/"),
+            protocol::sandbox::SandboxFlags::NONE,
+        );
+        tree.committing(
+            token(0),
+            2,
+            "https://b.test/",
+            web("https://b.test/"),
+            protocol::sandbox::SandboxFlags::NONE,
+        );
         assert_eq!(
             tree.did_commit(token(0), 3, "https://a.test/"),
             Err(BadMessageReason::CommitOfNoNavigation)
@@ -964,7 +1215,13 @@ mod tests {
     /// The browser sent `frame` navigation `id` to commit at `url`, of an
     /// opaque origin, and the renderer committed it.
     fn commit(tree: &mut FrameTree, frame: FrameToken, id: u64, url: &str) {
-        tree.committing(frame, id, url, CommittedOrigin::opaque());
+        tree.committing(
+            frame,
+            id,
+            url,
+            CommittedOrigin::opaque(),
+            protocol::sandbox::SandboxFlags::NONE,
+        );
         tree.did_commit(frame, id, url).unwrap();
     }
 
@@ -976,7 +1233,14 @@ mod tests {
     #[test]
     fn a_document_navigates_within_itself_as_html_lets_it() {
         let mut tree = FrameTree::new(token(0));
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         let cases = [
             (token(1), "about:blank#x", true),
             (token(1), "about:blank?q", false),
@@ -1035,17 +1299,42 @@ mod tests {
     #[test]
     fn what_the_tree_cant_take_is_a_bad_message() {
         let mut tree = FrameTree::new(token(0));
-        tree.add_child(token(0), token(1), "", false).unwrap();
+        tree.add_child(
+            token(0),
+            token(1),
+            "",
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         assert_eq!(
-            tree.add_child(token(9), token(2), "", false),
+            tree.add_child(
+                token(9),
+                token(2),
+                "",
+                false,
+                protocol::sandbox::SandboxFlags::NONE
+            ),
             Err(BadMessageReason::FrameParentUnknown)
         );
         assert_eq!(
-            tree.add_child(token(0), token(1), "", false),
+            tree.add_child(
+                token(0),
+                token(1),
+                "",
+                false,
+                protocol::sandbox::SandboxFlags::NONE
+            ),
             Err(BadMessageReason::FrameTokenInUse)
         );
         assert_eq!(
-            tree.add_child(token(1), token(0), "", false),
+            tree.add_child(
+                token(1),
+                token(0),
+                "",
+                false,
+                protocol::sandbox::SandboxFlags::NONE
+            ),
             Err(BadMessageReason::FrameTokenInUse)
         );
         assert_eq!(

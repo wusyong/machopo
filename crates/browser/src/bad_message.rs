@@ -32,6 +32,9 @@ pub enum BadMessageReason {
     /// A `srcdoc` of a frame the tab doesn't have as a child frame
     /// (Chromium's `RFH_OWNER_PROPERTY`).
     SrcdocOfUnknownFrame,
+    /// Sandbox flags of a frame the tab doesn't have as a child frame
+    /// (Chromium's `RFH_SANDBOX_FLAGS`: only a frame's parent sets them).
+    FramePolicyOfUnknownFrame,
     /// A scroll restoration mode (`UpdateState`) of a frame the tab
     /// doesn't have (Chromium's comes from the frame's own host).
     StateOfUnknownFrame,

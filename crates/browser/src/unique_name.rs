@@ -151,8 +151,14 @@ mod tests {
     }
 
     fn add(tree: &mut FrameTree, parent: u8, frame: u8, name: &str) -> String {
-        tree.add_child(token(parent), token(frame), name, false)
-            .unwrap();
+        tree.add_child(
+            token(parent),
+            token(frame),
+            name,
+            false,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         tree.unique_name(token(frame)).unwrap().to_owned()
     }
 
@@ -204,8 +210,22 @@ mod tests {
             add(&mut tree, 0, 2, &"x".repeat(MAX_REQUESTED_NAME_SIZE)).len(),
             80
         );
-        tree.add_child(token(0), token(3), "a", true).unwrap();
-        tree.add_child(token(0), token(4), "a", true).unwrap();
+        tree.add_child(
+            token(0),
+            token(3),
+            "a",
+            true,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
+        tree.add_child(
+            token(0),
+            token(4),
+            "a",
+            true,
+            protocol::sandbox::SandboxFlags::NONE,
+        )
+        .unwrap();
         let (three, four) = (
             tree.unique_name(token(3)).unwrap(),
             tree.unique_name(token(4)).unwrap(),

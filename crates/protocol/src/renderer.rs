@@ -289,6 +289,10 @@ pub enum RendererMsg {
         /// navigates to another origin and has it draw nothing keeps none
         /// of its own drawing up under another URL.
         paint_holding: bool,
+        /// The document's sandbox flags, as the browser worked them out
+        /// (Chromium's `PolicyContainerPolicies::sandbox_flags` of the
+        /// commit): with the origin flag, its origin is a new opaque one.
+        sandbox_flags: crate::sandbox::SandboxFlags,
     },
     /// `URLLoaderClient::OnComplete` of the load of the document navigation
     /// `navigation_id` committed in `frame`, which hadn't ended when it
@@ -827,6 +831,18 @@ pub enum RendererHostMsg {
         frame: crate::FrameToken,
         name: String,
         created_by_script: bool,
+        /// Its iframe's `sandbox` flags then (Chromium's `FramePolicy` of
+        /// `CreateChildFrame`): what its documents are sandboxed by, with
+        /// its parent's.
+        sandbox: crate::sandbox::SandboxFlags,
+    },
+    /// `FrameHost::DidChangeFramePolicy`: child frame `frame`'s iframe's
+    /// `sandbox` flags are `sandbox` now; the browser keeps them for the
+    /// frame's next navigation (HTML: a change counts from then on). A
+    /// frame not in the browser's tree is a bad message.
+    DidChangeFramePolicy {
+        frame: crate::FrameToken,
+        sandbox: crate::sandbox::SandboxFlags,
     },
     /// `FrameHost::DidChangeSrcDoc`: child frame `frame`'s iframe's `srcdoc`
     /// is `srcdoc` now (empty without one), as the frame was made and as

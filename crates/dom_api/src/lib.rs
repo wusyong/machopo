@@ -155,10 +155,10 @@ pub use document::{document_title, set_page_visible};
 pub use document_loader::DocumentLoader;
 pub use dom_api_macros::declare;
 pub use engine::{
-    ChildNavigationAsked, ClassicScript, ConsoleMessage, ConsoleSink, DevToolsInterrupter,
-    DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, DocumentLifecycle,
-    EngineSettings, FetchOrigin, FrameClient, LoadFrame, LoadSink, NavigationAsked, ScriptEngine,
-    WasmScript, WorkerEngine, WorkerGlobalParams,
+    ChildFrameMade, ChildNavigationAsked, ClassicScript, ConsoleMessage, ConsoleSink,
+    DevToolsInterrupter, DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued,
+    DevToolsSend, DocumentLifecycle, EngineSettings, FetchOrigin, FrameClient, LoadFrame, LoadSink,
+    NavigationAsked, ScriptEngine, WasmScript, WorkerEngine, WorkerGlobalParams,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};
@@ -167,8 +167,9 @@ pub use fetch::{FetchedResponse, did_receive_response};
 pub use focus::{flush_autofocus_candidates, focus_fixup, set_initial_focus, set_page_focused};
 pub use frame::{
     ChildNavigation, FrameId, FrameRequest, FrameToken, NavigationHere, NavigationRequest,
-    child_navigation_here, child_windows, documents_in_tree_order, frame_tree_walks_for_testing,
-    named_child_windows, navigate_child_to_fragment, new_frame_token, origin, same_origin,
+    child_navigation_here, child_windows, document_sandbox, documents_in_tree_order,
+    frame_tree_walks_for_testing, iframe_sandbox, named_child_windows, navigate_child_to_fragment,
+    new_frame_token, origin, same_origin, scripting_disabled, set_document_sandbox,
     update_elements,
 };
 pub use history::{
@@ -200,6 +201,9 @@ pub use performance::RANDOMIZED_TRIGGER_RATE;
 /// What a DevTools session has on, as an engine is given it with its attach
 /// (`DevToolsQueued::Attach`).
 pub use protocol::renderer::DevToolsSessionState;
+/// A document's and a frame's sandbox flags, as the browser has them
+/// (`protocol`'s): what an engine reads of them.
+pub use protocol::sandbox::SandboxFlags;
 pub use resize_observer::{
     ResizeObserverRound, gather_and_broadcast, has_resize_observations, report_loop_error,
 };

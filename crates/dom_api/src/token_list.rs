@@ -1,6 +1,7 @@
 //! `DOMTokenList` (https://dom.spec.whatwg.org/#interface-domtokenlist):
 //! one of an element's attributes as an ordered set of tokens: `classList`
-//! (`class`), a form's `relList` (`rel`), an output's `htmlFor` (`for`).
+//! (`class`), a form's `relList` (`rel`), an output's `htmlFor` (`for`),
+//! an iframe's `sandbox`.
 //! `class`'s set is the element's classes as style has them (each once, in
 //! order, interned: `contains` compares numbers); another's is its
 //! attribute's value parsed at each ask (few pages use them). A change
@@ -44,6 +45,27 @@ pub(crate) fn set_rel_list<'gc>(
     value: &str,
 ) -> Result<(), ApiError> {
     set_value(cx, cx.attribute_token_list(this, names::local::REL), value)
+}
+
+/// An iframe's `sandbox`: the same list each time.
+pub(crate) fn sandbox<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: NodeRef<'gc>,
+) -> Result<Gc<'gc, DomTokenList>, ApiError> {
+    Ok(cx.attribute_token_list(this, names::local::SANDBOX))
+}
+
+/// `sandbox = value` (`[PutForwards=value]`).
+pub(crate) fn set_sandbox<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: NodeRef<'gc>,
+    value: &str,
+) -> Result<(), ApiError> {
+    set_value(
+        cx,
+        cx.attribute_token_list(this, names::local::SANDBOX),
+        value,
+    )
 }
 
 /// An output's `htmlFor`: the same list each time.
@@ -270,6 +292,10 @@ pub(crate) fn supports<'gc>(
     token: &str,
 ) -> Result<bool, ApiError> {
     let attribute = cx.token_list_attribute(this);
+    // An iframe's `sandbox`: the tokens a `sandbox` attribute takes.
+    if attribute == names::local::SANDBOX {
+        return Ok(protocol::sandbox::is_token(token));
+    }
     let Some(tokens) = supported_tokens(cx, element(cx, this), attribute) else {
         return Err(ApiError::type_error(format!(
             "the '{}' attribute has no supported tokens",

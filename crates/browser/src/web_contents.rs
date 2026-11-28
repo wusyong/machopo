@@ -1240,12 +1240,26 @@ impl WebContents {
             devtools_initiator: asked.devtools_initiator,
             loads: page.is_none(),
         }));
+        // Sandboxed by the frame's flags as it starts (Chromium takes its
+        // pending frame policy into the commit's params then); an
+        // `about:blank` or a `data:` URL its initiator asked for by the
+        // initiator's too, as a local scheme's document inherits its
+        // initiator's policies.
+        let mut sandbox = self.frame_tree.pending_sandbox(frame);
+        let local_scheme = crate::loader::about_path(&url) == Some("blank")
+            || url
+                .get(..5)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"));
+        if local_scheme && let Some(initiator) = asked.initiator {
+            sandbox = sandbox | self.frame_tree.sandbox(initiator);
+        }
         let commit_params = CommitParams::new(
             frame,
             asked.begin_id,
             history,
             navigation_start,
             navigation_type,
+            sandbox,
         );
         let renderer_initiated = asked.renderer_initiated;
         if let Some((document, origin)) = page {
@@ -1485,6 +1499,15 @@ impl WebContents {
             self.relaunch();
         }
         let origin = origin.unwrap_or_else(|| document.origin());
+        // Sandboxed so, its origin is a new opaque one (Chromium's
+        // `GetOriginForURLLoaderFactoryBeforeResponse`): its loader, its
+        // storage and its site are of none.
+        let sandbox = params.sandbox_flags();
+        let origin = if sandbox.contains(protocol::sandbox::SandboxFlags::ORIGIN) {
+            CommittedOrigin::opaque()
+        } else {
+            origin
+        };
         if frame == self.frame_tree.root() {
             let paint_holding = self.allows_paint_holding(&origin.origin);
             params.set_paint_holding(paint_holding);
@@ -1529,7 +1552,7 @@ impl WebContents {
             return None;
         };
         self.frame_tree
-            .committing(frame, navigation_id, &document.url, origin);
+            .committing(frame, navigation_id, &document.url, origin, sandbox);
         let before = self.frame_tree.take_any_document_load(frame);
         let place = self.controller.commit_place(navigation_id);
         params.set_history_place(place, self.entries_heard.peek());
@@ -2403,11 +2426,17 @@ impl WebContents {
                 frame,
                 name,
                 created_by_script,
+                sandbox,
             } => {
                 if let Err(reason) =
                     self.frame_tree
-                        .add_child(*parent, *frame, name, *created_by_script)
+                        .add_child(*parent, *frame, name, *created_by_script, *sandbox)
                 {
+                    self.received_bad_message(reason);
+                }
+            }
+            RendererHostMsg::DidChangeFramePolicy { frame, sandbox } => {
+                if let Err(reason) = self.frame_tree.set_frame_policy(*frame, *sandbox) {
                     self.received_bad_message(reason);
                 }
             }

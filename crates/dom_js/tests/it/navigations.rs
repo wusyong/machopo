@@ -82,16 +82,7 @@ impl Navigations {
 }
 
 impl dom_api::FrameClient for Navigations {
-    fn child_frame_created(
-        &mut self,
-        _: FrameToken,
-        _: FrameToken,
-        _: &str,
-        _: bool,
-        _: Option<&str>,
-        _: &dom::Dom,
-    ) {
-    }
+    fn child_frame_created(&mut self, _: &dom_api::ChildFrameMade<'_>, _: &dom::Dom) {}
 
     fn child_document_created(&mut self, _: FrameToken, _: dom::NodeId) {}
 

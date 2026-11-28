@@ -3221,6 +3221,8 @@ crate::declare! {
         #[ce_reactions]
         attribute name: DomString, get = reflect::string::<{ local::NAME }>, set = reflect::set_string::<{ local::NAME }>;
         #[ce_reactions]
+        attribute sandbox: DOMTokenList, get = token_list::sandbox, set: DomString = token_list::set_sandbox;
+        #[ce_reactions]
         attribute width: DomString, get = reflect::string::<{ local::WIDTH }>, set = reflect::set_string::<{ local::WIDTH }>;
         #[ce_reactions]
         attribute height: DomString, get = reflect::string::<{ local::HEIGHT }>, set = reflect::set_string::<{ local::HEIGHT }>;

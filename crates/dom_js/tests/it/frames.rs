@@ -1366,28 +1366,202 @@ fn a_frame_goes_with_its_token() {
     );
 }
 
+/// An iframe's `sandbox` flags go to the host's client as its frame is
+/// made (its own, not its parent's) and as the attribute changes; its
+/// initial `about:blank` is sandboxed by them with its parent's: without
+/// `allow-same-origin` its origin is an opaque one its parent can't reach,
+/// with it its parent's. `sandbox` is a `DOMTokenList` of the tokens the
+/// attribute takes.
+#[test]
+fn an_iframes_sandbox_goes_to_its_frame() {
+    let mut engine = engine();
+    let main = dom_api::new_frame_token();
+    engine.set_main_frame_token(main);
+    let client = Client::default();
+    engine.set_frame_client(Box::new(client.clone()));
+    let told = || std::mem::take(&mut *client.0.borrow_mut());
+    run(
+        &mut engine,
+        "var f = document.createElement('iframe'); f.sandbox = 'allow-scripts';
+         document.body.appendChild(f);
+         var g = document.createElement('iframe'); g.setAttribute('sandbox', 'ALLOW-SAME-ORIGIN');
+         document.body.appendChild(g);
+         var h = document.body.appendChild(document.createElement('iframe'));
+         log.push(f.contentDocument === null, String(g.contentDocument === null),
+           String(h.contentDocument === null), f.sandbox.value, f.sandbox.supports('allow-popups'),
+           f.sandbox.supports('allow-plugins'));
+         try { f.contentWindow.document; log.push('reached'); } catch (e) { log.push(e.name); }",
+    );
+    assert_eq!(
+        log(&mut engine),
+        "true / false / false / allow-scripts / true / false / SecurityError"
+    );
+    let made = created(&mut engine, &[]);
+    let [(_, f), (_, g), (_, h)] = made[..] else {
+        panic!("{made:?}");
+    };
+    let flags = |value: &str| protocol::sandbox::parse(value).flags.bits();
+    assert_eq!(
+        told(),
+        [
+            format!(
+                "created {f} in {main} \"\" true sandboxed {:#x}",
+                flags("allow-scripts")
+            ),
+            format!(
+                "created {g} in {main} \"\" true sandboxed {:#x}",
+                flags("allow-same-origin")
+            ),
+            format!("created {h} in {main} \"\" true"),
+        ]
+    );
+    // Changed, then gone: none without it.
+    run(
+        &mut engine,
+        "f.sandbox.add('allow-forms'); f.removeAttribute('sandbox');",
+    );
+    assert_eq!(
+        told(),
+        [
+            format!("sandbox of {f} {:#x}", flags("allow-scripts allow-forms")),
+            format!("sandbox of {f} 0x0"),
+        ]
+    );
+}
+
+/// In a frame sandboxed without `allow-scripts`, scripting is disabled:
+/// an event handler content attribute is null, never run (its parent may
+/// set one, and dispatch the event), `<noscript>`'s markup is elements, a
+/// script inserted doesn't run; in a frame not sandboxed, each does.
+#[test]
+fn scripting_is_disabled_in_a_frame_sandboxed_so() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.createElement('iframe'); f.sandbox = 'allow-same-origin';
+         document.body.appendChild(f);
+         var body = f.contentDocument.body;
+         body.setAttribute('onclick', 'parent.ran = true');
+         body.dispatchEvent(new Event('click'));
+         body.innerHTML = '<noscript><p>shown</p></noscript>';
+         var script = f.contentDocument.createElement('script');
+         script.textContent = 'parent.scriptRan = true';
+         body.appendChild(script);
+         var g = document.body.appendChild(document.createElement('iframe'));
+         var other = g.contentDocument.body;
+         other.setAttribute('onclick', 'parent.alsoRan = true');
+         other.dispatchEvent(new Event('click'));
+         other.innerHTML = '<noscript><p>shown</p></noscript>';
+         var otherScript = g.contentDocument.createElement('script');
+         otherScript.textContent = 'parent.otherScriptRan = true';
+         other.appendChild(otherScript);
+         log.push(String(window.ran), String(body.onclick), body.querySelectorAll('p').length,
+           String(window.scriptRan), String(window.alsoRan), other.querySelectorAll('p').length,
+           String(window.otherScriptRan));",
+    );
+    assert_eq!(
+        log(&mut engine),
+        "undefined / null / 1 / undefined / true / 0 / true"
+    );
+}
+
+/// A frame made sandboxed to an opaque origin keeps its initial
+/// `about:blank`'s window for no document, its sandbox lifted for the
+/// next one: the window is of an opaque origin, the document of its
+/// parent's (HTML keeps the window for a document of its origin alone),
+/// whose realm its parent reaches (one kept would have the opaque
+/// origin's security token still).
+#[test]
+fn an_opaque_initial_window_is_kept_for_no_document() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.createElement('iframe'); f.sandbox = '';
+         document.body.appendChild(f);
+         f.removeAttribute('sandbox');",
+    );
+    let made = created(&mut engine, &[]);
+    let [(child, _)] = made[..] else {
+        panic!("{made:?}");
+    };
+    engine
+        .create_sandboxed_window(
+            child,
+            "https://example.test/a/child.html",
+            Instant::now(),
+            dom_api::SandboxFlags::NONE,
+        )
+        .expect("its frame");
+    run(
+        &mut engine,
+        "try { log.push(f.contentWindow.document === f.contentDocument); }
+         catch (e) { log.push(e.name); }",
+    );
+    assert_eq!(log(&mut engine), "true");
+}
+
+/// A document sandboxed to an opaque origin is of none other's, its URL
+/// of its parent's origin: its parent reaches neither it nor its realm.
+#[test]
+fn a_document_sandboxed_so_is_of_an_opaque_origin() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));",
+    );
+    let made = created(&mut engine, &[]);
+    let [(child, _)] = made[..] else {
+        panic!("{made:?}");
+    };
+    engine
+        .create_sandboxed_window(
+            child,
+            "https://example.test/a/child.html",
+            Instant::now(),
+            dom_api::SandboxFlags::ALL,
+        )
+        .expect("its frame");
+    run(
+        &mut engine,
+        "log.push(f.contentDocument === null);
+         try { f.contentWindow.document; log.push('reached'); } catch (e) { log.push(e.name); }",
+    );
+    assert_eq!(log(&mut engine), "true / SecurityError");
+}
+
 /// What a `FrameClient` was told, in order.
 #[derive(Clone, Default)]
 struct Client(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
 
 impl dom_api::FrameClient for Client {
-    fn child_frame_created(
-        &mut self,
-        parent: dom_api::FrameToken,
-        frame: dom_api::FrameToken,
-        name: &str,
-        created_by_script: bool,
-        stack: Option<&str>,
-        _dom: &dom::Dom,
-    ) {
+    fn child_frame_created(&mut self, made: &dom_api::ChildFrameMade<'_>, _dom: &dom::Dom) {
+        let dom_api::ChildFrameMade {
+            parent,
+            frame,
+            name,
+            created_by_script,
+            stack,
+            sandbox,
+        } = *made;
         let stack = if stack.is_some() {
             " with its stack"
         } else {
             ""
         };
+        let sandbox = if sandbox.is_empty() {
+            String::new()
+        } else {
+            format!(" sandboxed {:#x}", sandbox.bits())
+        };
         self.0.borrow_mut().push(format!(
-            "created {frame} in {parent} {name:?} {created_by_script}{stack}"
+            "created {frame} in {parent} {name:?} {created_by_script}{stack}{sandbox}"
         ));
+    }
+
+    fn frame_policy_changed(&mut self, frame: dom_api::FrameToken, sandbox: dom_api::SandboxFlags) {
+        self.0
+            .borrow_mut()
+            .push(format!("sandbox of {frame} {:#x}", sandbox.bits()));
     }
 
     fn child_document_created(&mut self, frame: dom_api::FrameToken, document: dom::NodeId) {

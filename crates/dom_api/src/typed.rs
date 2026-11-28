@@ -2085,6 +2085,16 @@ pub trait ScriptHost {
         let _ = (event, history);
     }
 
+    /// `owner`'s iframe's `sandbox` flags are `sandbox` now: its browsing
+    /// context's host told, for its next navigation. Nothing by default.
+    fn frame_policy_changed(
+        &mut self,
+        owner: &dom::NodeRoot,
+        sandbox: protocol::sandbox::SandboxFlags,
+    ) {
+        let _ = (owner, sandbox);
+    }
+
     /// `owner`'s browsing context is to navigate to `navigation`: its host
     /// loads the document. Nothing by default.
     fn navigate_child(&mut self, owner: &dom::NodeRoot, navigation: crate::ChildNavigation) {

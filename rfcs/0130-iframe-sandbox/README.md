@@ -1,7 +1,8 @@
 # RFC 0130：iframe 的 `sandbox`
 
 - 開始日期：2026-11-28
-- 狀態：👍 已接受：2026-11-28
+- 狀態：🚧 已排程：2026-11-28
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 RFC 0122 路線圖的 F2（M3 的第一份；0122 已完成，路線圖的那一列是背景，見它的已決定的事項第 7 條）。
@@ -60,8 +61,8 @@ machopo 不看 iframe 的 `sandbox` 屬性：sandbox 的 iframe 照樣跑 script
 
 1. **renderer 解析、告訴 Browser**：`sandbox` 屬性改了時，renderer 解析，經過新的訊息（Chromium 的 `DidChangeFramePolicy`）告訴 Browser；子 frame 建立時 `DidCreateChildFrame` 也帶著它（Chromium 的 `CreateChildFrame` 帶著 frame policy）。子 frame 一開始的 `about:blank` 在 renderer 建立時就照旗標。
 2. **Browser 的 frame 樹記著**：每個子 frame 一份 pending 的旗標，一定加上父 frame 現在的文件的旗標（Chromium 的 `SetPendingFramePolicy`，只能更嚴）；屬性改了，下一次導覽才生效。
-3. **commit 時算**：Browser 算出文件的旗標（frame 的 pending 的；`about:blank`、`about:srcdoc` 這類照它們的規則繼承），有 origin 的旗標就給 opaque 的 origin（Chromium 的 `GetOriginForURLLoaderFactoryBeforeResponse`），loader 的參數照它算（opaque 的 context，沒有 cookie）；旗標放在 `CommitNavigation` 裡交給 renderer，renderer 記在文件上。
-4. **renderer 照文件的旗標擋**：script、autofocus、導覽（Blink 的 `LocalFrame::CanNavigate`，machopo 的 `history::may_navigate`）、開新分頁（`blink::CreateNewWindow`）。
+3. **commit 時算**：Browser 算出文件的旗標（frame 的 pending 的，導覽開始時抄進 `CommitParams`；`about:blank` 和 `data:` 網址再加上發起者的文件的，照 Chromium 的 local scheme 繼承發起者的 policy），有 origin 的旗標就給 opaque 的 origin（Chromium 的 `GetOriginForURLLoaderFactoryBeforeResponse`），loader 的參數照它算（opaque 的 context，沒有 cookie）；旗標放在 `CommitNavigation` 裡交給 renderer，renderer 記在文件上。
+4. **renderer 照文件的旗標擋**：script、autofocus、導覽（Blink 的 `LocalFrame::CanNavigate`，machopo 的 `history::may_navigate`）、開新分頁（`blink::CreateNewWindow`）。分層：旗標的型別和解析在 `protocol`（`protocol::sandbox`，Chromium 的 `network::mojom::WebSandboxFlags`、`ParseWebSandboxPolicy`）；DOM 只記 bit 和兩個它要的效果（origin 是新的 opaque 的、scripting 關著），旗標的意思由 `dom_api` 翻譯（`set_document_sandbox`）。engine 建新文件時就帶著旗標（`ScriptEngine::create_sandboxed_window`）：origin 是 opaque 的文件不沿用初始 `about:blank` 的 window（HTML 只在同源時沿用），V8 的 security token 也是新的；在 `DocumentLoader` 之前，parser 才照 scripting 解析 `<noscript>`。scripting 關著時：`<script>` 不跑、事件的 handler 屬性是 null、`javascript:` 網址不跑、autofocus 不算、lazy 的圖片不 lazy（HTML 的「will lazy load element steps」）。renderer 自己 commit 的 `javascript:` 文件照它取代的文件的旗標。
 5. **Browser 照 Chromium 再檢查**：沒有 `allow-popups` 的 frame 要開新分頁是壞訊息（Chromium 的 `RenderFrameHostImpl::CreateNewWindow`）；改樹上沒有的 frame 的旗標是壞訊息（`FindAndVerifyChild`）。導覽最上層 Browser 不再檢查（Chromium 也不）。新分頁的 main frame 的 pending 旗標從開它的 frame 帶過去（沒有 `allow-popups-to-escape-sandbox` 時）。
 
 ### 擋什麼（已決定的事項第 1 條）

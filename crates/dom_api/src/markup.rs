@@ -15,10 +15,13 @@ use crate::typed::DomStr;
 use crate::{ApiCx, ApiError};
 
 /// HTML's "scripting is enabled" for `node`: its document has a window (a
-/// browsing context). It decides whether `<noscript>` holds markup or raw
-/// text, both ways.
+/// browsing context) and isn't sandboxed without `allow-scripts`. It
+/// decides whether `<noscript>` holds markup or raw text, both ways.
 fn scripting_enabled<'gc>(cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) -> bool {
-    cx.window_of(cx.document_of(node)).is_some()
+    let document = cx.document_of(node);
+    cx.window_of(document).is_some()
+        && !crate::frame::document_sandbox(cx, document)
+            .contains(protocol::sandbox::SandboxFlags::SCRIPTS)
 }
 
 fn error(name: ExceptionName, message: String) -> ApiError {

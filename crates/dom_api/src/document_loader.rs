@@ -137,11 +137,10 @@ impl DocumentLoader {
         start: &[u8],
         more: bool,
     ) -> Self {
-        let parser = if srcdoc {
-            Parser::new_srcdoc(dom, document)
-        } else {
-            Parser::new(dom, document)
-        };
+        // Scripting as the document is sandboxed (its host sandboxes it
+        // before it is loaded).
+        let scripting = dom.read(|cx| !crate::frame::scripting_disabled(cx, document.get(cx.gc)));
+        let parser = Parser::with_scripting(dom, document, srcdoc, scripting);
         Self {
             document: document.clone(),
             decoder: DocumentDecoder::new(mime_type, charset, start, more),

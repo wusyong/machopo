@@ -481,6 +481,16 @@ pub struct DocumentData {
     pub(crate) origin_source: Member<Node>,
     /// Discarded: its browsing context went (`frame`).
     pub(crate) discarded: Cell<bool>,
+    /// Its sandbox flags, as its host committed them (`frame`'s
+    /// `set_sandbox`): bits the DOM keeps and doesn't read, but for the
+    /// one that makes its origin a new opaque one (`opaque_origin`).
+    pub(crate) sandbox_flags: Cell<u32>,
+    /// Its origin is a new opaque one, whatever its URL (HTML's sandboxed
+    /// origin browsing context flag): no other document's (`frame`).
+    pub(crate) opaque_origin: Cell<bool>,
+    /// Scripting is disabled for it, sandboxed so (the sandboxed scripts
+    /// flag): its lazy images aren't (`frame`, `image`).
+    pub(crate) scripts_sandboxed: Cell<bool>,
     /// A top-level document's: the document of its frame tree's focused
     /// frame (`frame`; none: its own).
     pub(crate) focused_frame: Member<Node>,

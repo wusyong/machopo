@@ -350,10 +350,7 @@ impl<'gc> Cx<'_, 'gc> {
             if let Some(loader) = self.image_loader(element)
                 && loader.microtask_queued.get()
             {
-                loader.lazy_update.set(
-                    self.is_lazy_image(element)
-                        && self.window_of(self.document_of(element)).is_some(),
-                );
+                loader.lazy_update.set(self.will_lazy_load(element));
             }
             // HTML: a `loading` now eager resumes a lazy load that waits.
             if !self.is_lazy_image(element) {
@@ -413,6 +410,16 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn is_lazy_image(&self, element: NodeRef<'gc>) -> bool {
         self.attribute_value_by_id(element, names::local::LOADING)
             .is_some_and(|loading| loading.borrow().to_str().eq_ignore_ascii_case("lazy"))
+    }
+
+    /// HTML's "will lazy load element steps" for `element`: lazy, scripting
+    /// enabled for its document (a window, and not sandboxed without
+    /// `allow-scripts`; Blink's `CanExecuteScripts`).
+    fn will_lazy_load(&self, element: NodeRef<'gc>) -> bool {
+        let document = self.document_of(element);
+        self.is_lazy_image(element)
+            && self.window_of(document).is_some()
+            && !self.scripts_sandboxed(document)
     }
 
     /// HTML's "allows auto-sizes": lazy, its `sizes` `auto` or starting
@@ -653,9 +660,7 @@ impl<'gc> Cx<'_, 'gc> {
         let generation = loader.generation.get().wrapping_add(1);
         loader.generation.set(generation);
         loader.reacting.set(false);
-        loader.lazy_update.set(
-            self.is_lazy_image(element) && self.window_of(self.document_of(element)).is_some(),
-        );
+        loader.lazy_update.set(self.will_lazy_load(element));
         // Those asked since an earlier update reject: the request they
         // were for won't be (Chrome rejects them as the `src` changes).
         let stale = self.with_requests(loader, |requests| std::mem::take(&mut requests.upcoming));
@@ -893,9 +898,7 @@ impl<'gc> Cx<'_, 'gc> {
                 .or(selected),
             false => selected,
         };
-        // HTML's "will lazy load element steps": lazy, scripting enabled
-        // (a window).
-        let lazy = self.is_lazy_image(element) && has_window;
+        let lazy = self.will_lazy_load(element);
         let density = selected.as_ref().map_or(1.0, |(_, density)| *density);
         let source = selected.map(|(url, _)| self.resolve_image_url(element, &url));
         match source {

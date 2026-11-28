@@ -34,6 +34,16 @@ pub(crate) fn compile_event_handler(
         let found = state.dom.read(|cx| {
             let listener = cx.event_handler(target.get(cx.gc), event_type)?;
             let (source, line, element) = cx.uncompiled_handler(listener)?;
+            // HTML's "get the current value of the event handler": null
+            // where scripting is disabled (a document sandboxed without
+            // `allow-scripts`), as one that doesn't compile.
+            let owner_document = match target.get(cx.gc) {
+                TargetRef::Window(window) => cx.window_document(window),
+                _ => cx.document_of(element),
+            };
+            if dom_api::scripting_disabled(cx, owner_document) {
+                return Some(None);
+            }
             let (scopes, document) = match target.get(cx.gc) {
                 TargetRef::Window(window) => (None, cx.node_id(cx.window_document(window))),
                 _ => (
@@ -44,20 +54,29 @@ pub(crate) fn compile_event_handler(
                     cx.node_id(cx.document_of(element)),
                 ),
             };
-            Some((source, line, scopes, document))
+            Some(Some((source, line, scopes, document)))
         });
         // HTML's: in the element's (or the window's) realm, the frame's
         // showing its document; the current one's for a document no frame
         // shows.
-        found.map(|(source, line, scopes, document)| {
-            let realm = state
-                .frames
-                .of_document(document)
-                .map(|frame| frame.context.clone());
-            (source, line, scopes, realm)
+        found.map(|found| {
+            found.map(|(source, line, scopes, document)| {
+                let realm = state
+                    .frames
+                    .of_document(document)
+                    .map(|frame| frame.context.clone());
+                (source, line, scopes, realm)
+            })
         })
     };
+    let Some(found) = found else {
+        return;
+    };
     let Some((source, line, scopes, realm)) = found else {
+        let (state, _) = scope.state_mut();
+        state
+            .dom
+            .mutate(|cx| cx.remove_event_handler(target.get(cx.gc), event_type));
         return;
     };
     let extensions: Vec<v8::Local<'_, v8::Object>> = match scopes {

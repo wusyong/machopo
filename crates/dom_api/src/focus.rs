@@ -668,14 +668,20 @@ pub fn focus_fixup<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
 /// HTML's "autofocus" steps for `element`, which has the attribute and
 /// became connected (`dom` records it): one in a fully active
 /// top-level document, or a child frame's of the same origin, becomes a
-/// candidate of the top-level document's, until its autofocus has run.
+/// candidate of the top-level document's, until its autofocus has run;
+/// not one in a document sandboxed without `allow-scripts` (the sandboxed
+/// automatic features flag).
 pub(crate) fn autofocus_inserted<H: ScriptHost>(host: &mut H, element: dom::NodeId) {
     host.mutate(|cx| {
         let Some(element) = cx.node_by_id(element) else {
             return;
         };
         let document = cx.document_of(element);
-        if !cx.is_connected(element) || !crate::history::is_fully_active(cx, document) {
+        if !cx.is_connected(element)
+            || !crate::history::is_fully_active(cx, document)
+            || crate::frame::document_sandbox(cx, document)
+                .contains(protocol::sandbox::SandboxFlags::AUTOMATIC_FEATURES)
+        {
             return;
         }
         let top = cx.top_document(document);

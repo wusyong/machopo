@@ -1431,24 +1431,33 @@ impl<H: ?Sized + ParserHost> Parser<H> {
     /// A parser filling `document` (a new, empty one: its window's),
     /// scripting enabled.
     pub fn new(dom: &Dom, document: &NodeRoot) -> Self {
-        Self::with_srcdoc(dom, document, false)
+        Self::with_scripting(dom, document, false, true)
     }
 
     /// [`new`](Self::new), for an iframe's `srcdoc` document (HTML's
     /// "iframe srcdoc document"): never in quirks mode for lack of a
     /// doctype.
     pub fn new_srcdoc(dom: &Dom, document: &NodeRoot) -> Self {
-        Self::with_srcdoc(dom, document, true)
+        Self::with_scripting(dom, document, true, true)
     }
 
-    fn with_srcdoc(dom: &Dom, document: &NodeRoot, iframe_srcdoc: bool) -> Self {
+    /// A parser filling `document`, an iframe's `srcdoc` document if
+    /// `iframe_srcdoc`, with scripting enabled or not (HTML's "scripting is
+    /// disabled" for a document sandboxed so: `<noscript>`'s contents are
+    /// markup; its scripts' preparing finds scripting disabled).
+    pub fn with_scripting(
+        dom: &Dom,
+        document: &NodeRoot,
+        iframe_srcdoc: bool,
+        scripting_enabled: bool,
+    ) -> Self {
         let document = dom.read(|cx| SinkHandle::new(cx, document.get(cx.gc)));
         let sink = Sink::new(document);
         let tree_builder = html5ever::tree_builder::TreeBuilder::new(
             sink,
             TreeBuilderOpts {
                 iframe_srcdoc,
-                ..opts(true, QuirksMode::NoQuirks).tree_builder
+                ..opts(scripting_enabled, QuirksMode::NoQuirks).tree_builder
             },
         );
         Self {

@@ -28,6 +28,8 @@ pub(super) struct NavigationCommit {
     pub(super) navigation_type: FrameLoadType,
     /// The main frame's page before may stay shown till it is drawn.
     pub(super) paint_holding: bool,
+    /// What the document is sandboxed by, as the browser worked it out.
+    pub(super) sandbox_flags: protocol::sandbox::SandboxFlags,
 }
 
 /// A document's body as a commit brings it: its start (all of it, for one

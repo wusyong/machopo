@@ -4410,6 +4410,184 @@ document.querySelector('base').setAttribute('href', '/later/');
         web_contents.shutdown();
     }
 
+    /// A sandboxed iframe's document commits of an opaque origin in the
+    /// browser's frame tree, without `allow-same-origin`, its requests of
+    /// no cookies (the origin's, set by the page); with it, of its URL's
+    /// origin and the cookie. An iframe in a sandboxed frame is sandboxed
+    /// by its parent's flags too, whatever its own.
+    #[test]
+    fn a_sandboxed_frames_document_is_of_an_opaque_origin() {
+        for (sandbox, nested, opaque) in [
+            ("sandbox", false, true),
+            ("sandbox=allow-scripts", false, true),
+            ("sandbox=allow-same-origin", false, false),
+            ("", false, false),
+            ("sandbox=allow-same-origin", true, false),
+            ("sandbox", true, true),
+        ] {
+            let child = if nested {
+                "<!DOCTYPE html><iframe src=/grandchild></iframe>"
+            } else {
+                "<!DOCTYPE html><img src=/image.png>"
+            };
+            let html = format!(
+                "{}<iframe {sandbox} src=/child></iframe>",
+                after_load("report('loaded')")
+            );
+            let server = server(&[
+                (
+                    "/",
+                    Route::ok("text/html", html).with_header("Set-Cookie", "a=b"),
+                ),
+                ("/child", Route::ok("text/html", child)),
+                (
+                    "/grandchild",
+                    Route::ok("text/html", "<!DOCTYPE html><img src=/image.png>"),
+                ),
+                ("/image.png", Route::ok("image/png", "png")),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            let main = web_contents.devtools_frame_token();
+            web_contents.navigate(server.url("/"));
+            assert_eq!(report(&mut web_contents, &host_rx), "loaded", "{sandbox}");
+            let mut frame = web_contents.frame_tree().children(main)[0];
+            if nested {
+                frame = web_contents.frame_tree().children(frame)[0];
+            }
+            let origin = web_contents.frame_tree().origin(frame).cloned().unwrap();
+            assert_eq!(!origin.is_tuple(), opaque, "{sandbox} {nested}");
+            let image = server
+                .requests()
+                .into_iter()
+                .find(|request| request.target == "/image.png")
+                .expect("the image asked for");
+            let cookie = image.headers.iter().any(|(name, _)| name == "cookie");
+            assert_eq!(cookie, !opaque, "{sandbox} {nested}");
+            web_contents.shutdown();
+        }
+    }
+
+    /// A sandboxed iframe's `javascript:` URL's document, the renderer's
+    /// own, is sandboxed as the one it replaces: one of its parent's
+    /// origin (`allow-same-origin`) has scripting disabled still, a
+    /// handler its parent sets on it never run. (A `javascript:` URL of a
+    /// frame of another origin than its initiator's goes nowhere.)
+    #[test]
+    fn a_sandboxed_frames_javascript_document_stays_sandboxed() {
+        for (sandbox, ran) in [("sandbox=allow-same-origin", "undefined"), ("", "true")] {
+            let html = format!(
+                "{}<iframe {sandbox} src=\"javascript:''\"></iframe>",
+                after_load(
+                    "const document_ = document.querySelector('iframe').contentDocument;\
+                     const element = (document_.documentElement || document_).appendChild(document_.createElement('p'));\
+                     element.setAttribute('onclick', 'parent.ran = true');\
+                     element.dispatchEvent(new Event('click'));\
+                     report(`${document_.URL}-${window.ran}`);"
+                )
+            );
+            let server = server(&[("/", Route::ok("text/html", html))]);
+            let (mut web_contents, host_rx) = tab();
+            web_contents.navigate(server.url("/"));
+            assert_eq!(
+                report(&mut web_contents, &host_rx),
+                format!("javascript:%27%27-{ran}"),
+                "{sandbox}"
+            );
+            web_contents.shutdown();
+        }
+    }
+
+    /// An autofocus candidate of a document sandboxed without
+    /// `allow-scripts` isn't one (the sandboxed automatic features flag),
+    /// of its parent's origin though (`allow-same-origin`); one of a
+    /// document not sandboxed takes the focus. The animation frame after
+    /// the parent's `load` tells which: the rendering update flushes the
+    /// candidates before it runs the callbacks.
+    #[test]
+    fn a_sandboxed_document_doesnt_autofocus() {
+        for (sandbox, focused) in [("sandbox=allow-same-origin", "BODY"), ("", "INPUT")] {
+            let html = format!(
+                "{}<iframe {sandbox} src=/child></iframe>",
+                after_load(
+                    "requestAnimationFrame(() => report(\
+                       document.querySelector('iframe').contentDocument.activeElement.tagName));"
+                )
+            );
+            let server = server(&[
+                ("/", Route::ok("text/html", html)),
+                (
+                    "/child",
+                    Route::ok("text/html", "<!DOCTYPE html><input autofocus>"),
+                ),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            web_contents.navigate(server.url("/"));
+            assert_eq!(report(&mut web_contents, &host_rx), focused, "{sandbox}");
+            web_contents.shutdown();
+        }
+    }
+
+    /// A `javascript:` URL of a document sandboxed without
+    /// `allow-scripts` doesn't run (scripting is disabled), one of a
+    /// document not sandboxed does. Its `hashchange`, queued after it on
+    /// the document's window, tells which, once it had its turn.
+    #[test]
+    fn a_sandboxed_documents_javascript_url_doesnt_run() {
+        for (sandbox, ran) in [("sandbox=allow-same-origin", "undefined"), ("", "true")] {
+            let html = format!(
+                "{}<iframe {sandbox} src=/child></iframe>",
+                after_load(
+                    "const child = document.querySelector('iframe').contentWindow;\
+                     child.addEventListener('hashchange', () => report(`${window.ran}`));\
+                     child.location.href = 'javascript:parent.ran = true; void 0';\
+                     child.location.hash = 'x';"
+                )
+            );
+            let server = server(&[
+                ("/", Route::ok("text/html", html)),
+                ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+            ]);
+            let (mut web_contents, host_rx) = tab();
+            web_contents.navigate(server.url("/"));
+            assert_eq!(report(&mut web_contents, &host_rx), ran, "{sandbox}");
+            web_contents.shutdown();
+        }
+    }
+
+    /// The `sandbox` attribute changed counts from the frame's next
+    /// navigation (HTML; Chromium's pending frame policy): the document it
+    /// shows keeps its origin, the next one is of an opaque origin.
+    #[test]
+    fn a_changed_sandbox_counts_from_the_next_navigation() {
+        let html = format!(
+            "{}<iframe src=/child></iframe>",
+            after_load(
+                "const frame = document.querySelector('iframe');\
+                 const before = frame.contentDocument !== null;\
+                 frame.sandbox = '';\
+                 const still = frame.contentDocument !== null;\
+                 frame.onload = () => report(`${before}-${still}-${frame.contentDocument === null}`);\
+                 frame.src = '/next';"
+            )
+        );
+        let server = server(&[
+            ("/", Route::ok("text/html", html)),
+            ("/child", Route::ok("text/html", "<!DOCTYPE html>child")),
+            ("/next", Route::ok("text/html", "<!DOCTYPE html>next")),
+        ]);
+        let (mut web_contents, host_rx) = tab();
+        let main = web_contents.devtools_frame_token();
+        web_contents.navigate(server.url("/"));
+        assert_eq!(report(&mut web_contents, &host_rx), "true-true-true");
+        let child = web_contents.frame_tree().children(main)[0];
+        assert_eq!(
+            web_contents.frame_tree().url(child),
+            Some(server.url("/next").as_str())
+        );
+        assert!(!web_contents.frame_tree().origin(child).unwrap().is_tuple());
+        web_contents.shutdown();
+    }
+
     /// A child frame's `location.reload()` is the browser's to load, from
     /// the URL it has for the frame: its document loaded again, a reload.
     #[test]
@@ -4768,18 +4946,20 @@ document.querySelector('base').setAttribute('href', '/later/');
         // A parent not there, a token in use, a frame not there gone, the
         // main frame gone, a navigation of or by a frame not there, a new
         // tab by one: each to the renderer of the time.
-        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 16] = [
+        let bads: [fn(protocol::FrameToken, protocol::FrameToken) -> RendererHostMsg; 18] = [
             |_, _| RendererHostMsg::DidCreateChildFrame {
                 parent: protocol::FrameToken([0xEE; 16]),
                 frame: protocol::FrameToken([0xEF; 16]),
                 name: String::new(),
                 created_by_script: false,
+                sandbox: protocol::sandbox::SandboxFlags::NONE,
             },
             |main, child| RendererHostMsg::DidCreateChildFrame {
                 parent: main,
                 frame: child,
                 name: String::new(),
                 created_by_script: false,
+                sandbox: protocol::sandbox::SandboxFlags::NONE,
             },
             |_, _| RendererHostMsg::DidDetachFrame {
                 frame: protocol::FrameToken([0xEE; 16]),
@@ -4824,6 +5004,16 @@ document.querySelector('base').setAttribute('href', '/later/');
             |main, _| RendererHostMsg::DidChangeSrcDoc {
                 frame: main,
                 srcdoc: String::new(),
+            },
+            // The sandbox flags of a frame not there, or of the main frame
+            // (whose are no iframe's).
+            |_, _| RendererHostMsg::DidChangeFramePolicy {
+                frame: protocol::FrameToken([0xEE; 16]),
+                sandbox: protocol::sandbox::SandboxFlags::ALL,
+            },
+            |main, _| RendererHostMsg::DidChangeFramePolicy {
+                frame: main,
+                sandbox: protocol::sandbox::SandboxFlags::ALL,
             },
             // A navigation within a document of a frame not there, or to a
             // URL of another origin.

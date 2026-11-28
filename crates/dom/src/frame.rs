@@ -50,6 +50,8 @@ pub enum FrameOwnerChange {
     /// Its `src` or `srcdoc` changed, connected.
     SrcChanged(NodeId),
     SrcdocChanged(NodeId),
+    /// Its `sandbox` changed, connected.
+    SandboxChanged(NodeId),
 }
 
 #[derive(Default)]
@@ -247,7 +249,7 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `element`'s attribute `name` changed from `old` to `new`, and it is
-    /// connected: an `<iframe>`'s `src` or `srcdoc` recorded; a
+    /// connected: an `<iframe>`'s `src`, `srcdoc` or `sandbox` recorded; a
     /// modulepreload link's (`script`).
     #[inline(never)]
     pub(crate) fn frame_owner_attribute_changed(
@@ -276,6 +278,8 @@ impl<'gc> Cx<'_, 'gc> {
             self.element_asked_for_load(element, false);
         } else if name == QualifiedName::plain(names::local::SRCDOC) {
             self.record_element_change(ElementChange::Frame(FrameOwnerChange::SrcdocChanged(id)));
+        } else if name == QualifiedName::plain(names::local::SANDBOX) {
+            self.record_element_change(ElementChange::Frame(FrameOwnerChange::SandboxChanged(id)));
         }
     }
 
@@ -378,10 +382,15 @@ impl<'gc> Cx<'_, 'gc> {
     /// `javascript:` URL's (the empty document its host commits), its
     /// iframe's document's, as its creator's (HTML's: a `javascript:` URL's
     /// document has its initiator's origin).
+    /// A sandboxed one (`set_sandbox` with an opaque origin) is its own:
+    /// it has no other's.
     pub fn origin_document(&self, document: NodeRef<'gc>) -> NodeRef<'gc> {
         let mut at = document;
         // A frame tree is fewer than u16::MAX deep.
         for _ in 0..u16::MAX {
+            if self.has_opaque_origin(at) {
+                break;
+            }
             if let Some(source) = self
                 .document_data(at)
                 .and_then(|data| data.into_ref().origin_source.get(self.gc))
@@ -414,9 +423,14 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `document`'s origin, as its URL's (`origin_document`'s): none
-    /// without one.
+    /// without one; an opaque one for a document sandboxed so (a new one
+    /// each time: which document has it is its `origin_document`).
     pub fn document_origin(&self, document: NodeRef<'gc>) -> Option<url::Origin> {
-        self.document_url(self.origin_document(document))
+        let document = self.origin_document(document);
+        if self.has_opaque_origin(document) {
+            return Some(url::Origin::new_opaque());
+        }
+        self.document_url(document)
             .and_then(|url| url::Url::parse(&url.to_str()).ok())
             .map(|url| url.origin())
     }
@@ -665,5 +679,42 @@ impl<'gc> Cx<'_, 'gc> {
     pub fn is_discarded(&self, document: NodeRef<'gc>) -> bool {
         self.document_data(document)
             .is_some_and(|data| data.into_ref().discarded.get())
+    }
+
+    /// `document` is sandboxed by `flags` (its host's, as it committed or
+    /// as its frame was made): bits the DOM keeps for its users
+    /// (`sandbox_flags`); with `opaque_origin`, its origin is a new opaque
+    /// one from now on, whatever its URL or creator; with
+    /// `scripts_sandboxed`, scripting is disabled for it.
+    pub fn set_sandbox(
+        &self,
+        document: NodeRef<'gc>,
+        flags: u32,
+        opaque_origin: bool,
+        scripts_sandboxed: bool,
+    ) {
+        let data = self.ensure_document_data(document);
+        data.sandbox_flags.set(flags);
+        data.opaque_origin.set(opaque_origin);
+        data.scripts_sandboxed.set(scripts_sandboxed);
+    }
+
+    /// Whether scripting is disabled for `document`, sandboxed so.
+    pub fn scripts_sandboxed(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document)
+            .is_some_and(|data| data.into_ref().scripts_sandboxed.get())
+    }
+
+    /// `document`'s sandbox flags (`set_sandbox`'s bits): none for one
+    /// never sandboxed.
+    pub fn sandbox_flags(&self, document: NodeRef<'gc>) -> u32 {
+        self.document_data(document)
+            .map_or(0, |data| data.into_ref().sandbox_flags.get())
+    }
+
+    /// Whether `document`'s origin is a new opaque one, sandboxed so.
+    pub fn has_opaque_origin(&self, document: NodeRef<'gc>) -> bool {
+        self.document_data(document)
+            .is_some_and(|data| data.into_ref().opaque_origin.get())
     }
 }

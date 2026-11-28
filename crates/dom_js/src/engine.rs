@@ -461,173 +461,44 @@ impl ScriptEngine for V8Engine {
         url: &str,
         time_origin: Instant,
     ) -> Option<NodeRoot> {
-        // HTML's: a child frame's initial `about:blank` navigated to a
-        // document of its origin keeps its window, and what script put on
-        // it (Blink reuses the `LocalDOMWindow`).
-        let initial = self
-            .state()
-            .frames
-            .get(frame)
-            .filter(|known| known.initial)
-            .and_then(|known| Some((known.parent, known.owner.clone()?, known.context.clone())));
-        if let Some((parent, owner, context)) = initial
-            && self.inherits_origin(parent, url)
-        {
-            return Some(self.reuse_initial_window(
-                frame,
-                &context,
-                url,
-                time_origin,
-                parent,
-                &owner,
-            ));
-        }
-        let web_tests = self.settings.web_tests;
-        let page_focused = self.page_focused;
-        let page_hidden = self.page_hidden;
-        let isolate = self.data.isolate();
-        v8::scope!(let scope, isolate);
-        let bootstrap = v8::Local::new(scope, &self.bootstrap);
-        let scope = &mut v8::ContextScope::new(scope, bootstrap);
-        // A child frame's place: its parent and iframe, as they were.
-        let place = if frame == crate::frames::TOP {
-            None
-        } else {
-            let mut state_scope = state::scope(scope).expect("the engine's DOM");
-            let (state, _) = state_scope.state();
-            let frame = state.frames.get(frame)?;
-            Some((frame.parent, frame.owner.clone()))
-        };
-        // The frame's realm before, if it has one: it navigates.
-        let before = {
-            let mut state_scope = state::scope(scope).expect("the engine's DOM");
-            let (state, _) = state_scope.state();
-            state.frames.get(frame).map(|frame| frame.context.clone())
-        };
-        // A child frame that navigates: the frames of its document before
-        // go with it.
-        if place.is_some() && before.is_some() {
-            let mut state_scope = state::scope(scope).expect("the engine's DOM");
-            crate::frames::discard_descendants(&mut state_scope, frame);
-        }
-        // HTML's `WindowProxy`: the frame's global proxy goes on, the
-        // realm before detached from it (Blink's `LocalWindowProxy`).
-        let proxy = before.as_ref().map(|context| {
-            let context = v8::Local::new(scope, context);
-            crate::window_properties::detached(
-                &mut state::scope(scope).expect("the engine's DOM"),
-                context,
-            );
-            let proxy = context.global(scope);
-            context.detach_global();
-            proxy
+        self.create_window_reusing(frame, url, time_origin, true)
+    }
+
+    /// As the DOM's, and the realm follows: a new window, never an initial
+    /// `about:blank`'s, and a new opaque security token, sandboxed so.
+    fn create_sandboxed_window(
+        &mut self,
+        frame: dom_api::FrameId,
+        url: &str,
+        time_origin: Instant,
+        flags: dom_api::SandboxFlags,
+    ) -> Option<NodeRoot> {
+        let opaque = flags.contains(dom_api::SandboxFlags::ORIGIN);
+        let document = self.create_window_reusing(frame, url, time_origin, !opaque)?;
+        self.state().dom.mutate(|cx| {
+            dom_api::set_document_sandbox(cx, document.get(cx.gc), flags);
         });
-        // The top-level frame navigates: every realm has gone for the
-        // inspector, before it hears of the new one (Blink's
-        // `MainThreadDebugger::DidClearContextsForFrame`).
-        if place.is_none() && before.is_some() {
-            crate::devtools::realms_cleared(scope);
-        }
-        let context = create_window_realm(scope, url, proxy);
-        {
-            let mut state_scope = state::scope(scope).expect("the engine's DOM");
-            let parent = place
-                .as_ref()
-                .and_then(|(parent, _)| *parent)
-                .and_then(|parent| {
-                    let (state, _) = state_scope.state();
-                    state.frames.get(parent).map(|frame| frame.context.clone())
-                });
-            crate::frames::set_security_token(&mut state_scope, context, url, parent.as_ref());
-        }
-        let global = context.global(scope);
-        let (document, document_id) = {
-            let mut scope = state::scope(scope).expect("the engine's DOM");
-            let (state, mut no_gc) = scope.state_mut();
-            state.dom.mutate(|cx| {
-                let window = no_gc
-                    .unwrap::<Window>(cx.gc, global)
-                    .expect("a realm's window");
-                cx.set_window_time_origin(window, time_origin);
-                // No element has the focus yet: no events.
-                cx.set_page_focused(window, page_focused);
-                cx.set_page_hidden(window, page_hidden);
-                // The parser's: loading until it is parsed.
-                let document = cx.window_document(window);
-                cx.set_ready_state(document, dom::DocumentReadyState::Loading);
-                if let Some((_, Some(owner))) = &place {
-                    cx.set_content_document(owner.get(cx.gc), Some(document));
-                }
-                (cx.root(document), cx.node_id(document))
-            })
-        };
-        // A child frame's new document is told before its realm is.
-        if place.is_some() {
-            let mut state_scope = state::scope(scope).expect("the engine's DOM");
-            state_scope
-                .state_mut()
-                .0
-                .frames
-                .tell_document_created(frame, document_id);
-        }
-        {
-            let scope = &mut v8::ContextScope::new(scope, context);
-            // A child frame's realm before has gone for the inspector, and
-            // it hears of the new one (Blink's
-            // `MainThreadDebugger::ContextCreated`): V8's `console` reports
-            // through it.
-            if let Some(before) = before.as_ref().filter(|_| place.is_some()) {
-                crate::devtools::realm_destroyed(scope, before);
-            }
-            let mut state_scope = state::scope(scope).expect("the engine's DOM");
-            let token = state_scope.state().0.frames.token(frame);
-            crate::devtools::realm_created(&mut state_scope, context, frame, token, &document);
-            if web_tests && place.is_none() {
-                install_test_runner(scope, global);
-            }
-        }
-        let global_context = v8::Global::new(scope, context);
-        {
-            let mut scope = state::scope(scope).expect("the engine's DOM");
-            let (parent, owner) = place.clone().unwrap_or((None, None));
-            // The documents gone: the frame's before, and with a new
-            // top-level one every frame's; their workers with them.
-            let state = scope.state_mut().0;
-            let gone: Vec<NodeRoot> = state
-                .frames
-                .iter()
-                .filter(|before| place.is_none() || before.id == frame)
-                .map(|before| before.document.clone())
-                .collect();
-            crate::frames::terminate_workers(state, &gone);
-            if place.is_none() {
-                scope.state_mut().0.frames.clear_children();
-            }
-            scope.state_mut().0.frames.set(crate::frames::Frame::new(
-                frame,
-                global_context.clone(),
-                document.clone(),
-                document_id,
-                parent,
-                owner,
-                false,
-            ));
-        }
-        if place.is_none() {
-            self.context = Some(global_context);
-            self.document = Some(document.clone());
-            self.event_handler = dom_api::EventHandler::default();
+        if opaque {
+            self.give_opaque_token(frame);
         }
         Some(document)
     }
 
     /// As the DOM's, and the realm's security token follows: that of the
     /// realm of `source`'s origin's document, if a frame shows it still
-    /// (an opaque origin is that realm's alone), else its origin's.
+    /// (an opaque origin is that realm's alone), else its origin's. A
+    /// document sandboxed to an opaque origin has none from `source`.
     fn inherit_origin(&mut self, frame: dom_api::FrameId, document: &NodeRoot, source: &NodeRoot) {
         let Some((context, _)) = self.frame_context_and_document(frame) else {
             return;
         };
+        if self
+            .state()
+            .dom
+            .read(|cx| cx.has_opaque_origin(document.get(cx.gc)))
+        {
+            return;
+        }
         let state = self.state();
         let (origin_document, origin) = state.dom.mutate(|cx| {
             cx.set_origin_source(document.get(cx.gc), source.get(cx.gc));
@@ -1771,6 +1642,202 @@ impl ScriptEngine for V8Engine {
 }
 
 impl V8Engine {
+    /// The realm of `frame`'s document has a new opaque origin's security
+    /// token.
+    fn give_opaque_token(&mut self, frame: dom_api::FrameId) {
+        let Some((context, _)) = self.frame_context_and_document(frame) else {
+            return;
+        };
+        let isolate = self.data.isolate();
+        v8::scope!(let scope, isolate);
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let mut scope = state::scope(scope).expect("the engine's DOM");
+        crate::frames::set_origin_token(&mut scope, context, None);
+    }
+
+    /// `ScriptEngine::create_window`, its child frame's initial
+    /// `about:blank`'s window kept if `reuse` and HTML keeps it: a document
+    /// of that window's origin (not one sandboxed to an opaque origin, nor
+    /// in a window that is of one).
+    fn create_window_reusing(
+        &mut self,
+        frame: dom_api::FrameId,
+        url: &str,
+        time_origin: Instant,
+        reuse: bool,
+    ) -> Option<NodeRoot> {
+        // HTML's: a child frame's initial `about:blank` navigated to a
+        // document of its origin keeps its window, and what script put on
+        // it (Blink reuses the `LocalDOMWindow`).
+        let initial = self
+            .state()
+            .frames
+            .get(frame)
+            .filter(|known| reuse && known.initial)
+            .and_then(|known| {
+                Some((
+                    known.parent,
+                    known.owner.clone()?,
+                    known.context.clone(),
+                    known.document.clone(),
+                ))
+            });
+        if let Some((parent, owner, context, document)) = initial
+            && !self
+                .state()
+                .dom
+                .read(|cx| cx.has_opaque_origin(document.get(cx.gc)))
+            && self.inherits_origin(parent, url)
+        {
+            return Some(self.reuse_initial_window(
+                frame,
+                &context,
+                url,
+                time_origin,
+                parent,
+                &owner,
+            ));
+        }
+        let web_tests = self.settings.web_tests;
+        let page_focused = self.page_focused;
+        let page_hidden = self.page_hidden;
+        let isolate = self.data.isolate();
+        v8::scope!(let scope, isolate);
+        let bootstrap = v8::Local::new(scope, &self.bootstrap);
+        let scope = &mut v8::ContextScope::new(scope, bootstrap);
+        // A child frame's place: its parent and iframe, as they were.
+        let place = if frame == crate::frames::TOP {
+            None
+        } else {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            let (state, _) = state_scope.state();
+            let frame = state.frames.get(frame)?;
+            Some((frame.parent, frame.owner.clone()))
+        };
+        // The frame's realm before, if it has one: it navigates.
+        let before = {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            let (state, _) = state_scope.state();
+            state.frames.get(frame).map(|frame| frame.context.clone())
+        };
+        // A child frame that navigates: the frames of its document before
+        // go with it.
+        if place.is_some() && before.is_some() {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            crate::frames::discard_descendants(&mut state_scope, frame);
+        }
+        // HTML's `WindowProxy`: the frame's global proxy goes on, the
+        // realm before detached from it (Blink's `LocalWindowProxy`).
+        let proxy = before.as_ref().map(|context| {
+            let context = v8::Local::new(scope, context);
+            crate::window_properties::detached(
+                &mut state::scope(scope).expect("the engine's DOM"),
+                context,
+            );
+            let proxy = context.global(scope);
+            context.detach_global();
+            proxy
+        });
+        // The top-level frame navigates: every realm has gone for the
+        // inspector, before it hears of the new one (Blink's
+        // `MainThreadDebugger::DidClearContextsForFrame`).
+        if place.is_none() && before.is_some() {
+            crate::devtools::realms_cleared(scope);
+        }
+        let context = create_window_realm(scope, url, proxy);
+        {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            let parent = place
+                .as_ref()
+                .and_then(|(parent, _)| *parent)
+                .and_then(|parent| {
+                    let (state, _) = state_scope.state();
+                    state.frames.get(parent).map(|frame| frame.context.clone())
+                });
+            crate::frames::set_security_token(&mut state_scope, context, url, parent.as_ref());
+        }
+        let global = context.global(scope);
+        let (document, document_id) = {
+            let mut scope = state::scope(scope).expect("the engine's DOM");
+            let (state, mut no_gc) = scope.state_mut();
+            state.dom.mutate(|cx| {
+                let window = no_gc
+                    .unwrap::<Window>(cx.gc, global)
+                    .expect("a realm's window");
+                cx.set_window_time_origin(window, time_origin);
+                // No element has the focus yet: no events.
+                cx.set_page_focused(window, page_focused);
+                cx.set_page_hidden(window, page_hidden);
+                // The parser's: loading until it is parsed.
+                let document = cx.window_document(window);
+                cx.set_ready_state(document, dom::DocumentReadyState::Loading);
+                if let Some((_, Some(owner))) = &place {
+                    cx.set_content_document(owner.get(cx.gc), Some(document));
+                }
+                (cx.root(document), cx.node_id(document))
+            })
+        };
+        // A child frame's new document is told before its realm is.
+        if place.is_some() {
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            state_scope
+                .state_mut()
+                .0
+                .frames
+                .tell_document_created(frame, document_id);
+        }
+        {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            // A child frame's realm before has gone for the inspector, and
+            // it hears of the new one (Blink's
+            // `MainThreadDebugger::ContextCreated`): V8's `console` reports
+            // through it.
+            if let Some(before) = before.as_ref().filter(|_| place.is_some()) {
+                crate::devtools::realm_destroyed(scope, before);
+            }
+            let mut state_scope = state::scope(scope).expect("the engine's DOM");
+            let token = state_scope.state().0.frames.token(frame);
+            crate::devtools::realm_created(&mut state_scope, context, frame, token, &document);
+            if web_tests && place.is_none() {
+                install_test_runner(scope, global);
+            }
+        }
+        let global_context = v8::Global::new(scope, context);
+        {
+            let mut scope = state::scope(scope).expect("the engine's DOM");
+            let (parent, owner) = place.clone().unwrap_or((None, None));
+            // The documents gone: the frame's before, and with a new
+            // top-level one every frame's; their workers with them.
+            let state = scope.state_mut().0;
+            let gone: Vec<NodeRoot> = state
+                .frames
+                .iter()
+                .filter(|before| place.is_none() || before.id == frame)
+                .map(|before| before.document.clone())
+                .collect();
+            crate::frames::terminate_workers(state, &gone);
+            if place.is_none() {
+                scope.state_mut().0.frames.clear_children();
+            }
+            scope.state_mut().0.frames.set(crate::frames::Frame::new(
+                frame,
+                global_context.clone(),
+                document.clone(),
+                document_id,
+                parent,
+                owner,
+                false,
+            ));
+        }
+        if place.is_none() {
+            self.context = Some(global_context);
+            self.document = Some(document.clone());
+            self.event_handler = dom_api::EventHandler::default();
+        }
+        Some(document)
+    }
+
     /// The mutation observers' microtask queued, in the realm, if an
     /// operation out of script (the parser's) queued the first record.
     fn queue_mutation_delivery(&mut self) {

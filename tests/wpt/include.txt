@@ -904,12 +904,87 @@ fetch/corb/
 # Whether a site lets itself be framed: `X-Frame-Options` and CSP's
 # `frame-ancestors`, checked by the browser before a child frame's final
 # response commits. Their results are Chrome's but where machopo lacks
-# what a test uses: the iframe's `sandbox` (its frames aren't opaque, so
-# the two sandboxed ones aren't blocked), service workers, and CSP's
-# violation reports. `get-decode-split.html` passes; Chrome's run of it
+# what a test uses: service workers and CSP's violation reports. `get-decode-split.html` passes; Chrome's run of it
 # on wpt.fyi times out.
 x-frame-options/
 content-security-policy/frame-ancestors/
+
+# An iframe's `sandbox`: the flags its renderer parses and the browser
+# keeps and commits, the document's origin opaque without
+# `allow-same-origin`, scripting disabled without `allow-scripts`. Their
+# results are Chrome's but where machopo lacks what a test uses:
+# `window.open`, form submission, modals (`alert`), downloads, `<video>`,
+# PDF, `document.domain`, CSP's `sandbox`; and, for now, what a sandboxed
+# frame may navigate (its ancestors, the top) and its new tabs.
+html/browsers/sandboxing/
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_script.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-3.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation_by_user_activation_with_user_gesture.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation_by_user_activation_without_user_gesture.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_anchor_download_allow_downloads.tentative.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_anchor_download_block_downloads.tentative.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-4.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_iframe_pdf_viewer.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_descendants.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_forward.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_itself.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_other_frame_popup.sub.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigation_download_allow_downloads.sub.tentative.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigation_download_block_downloads.sub.tentative.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-3.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_window_open_download_allow_downloads.tentative.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_window_open_download_block_downloads.tentative.html
+html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitive.html
+html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed-frame.html
+html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
+html/semantics/embedded-content/the-iframe-element/sandbox-toggle-in-inactive-document-crash.html
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-child-cross-origin-frame.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-child-delivered-both.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-child-delivered.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-child-unsandboxed.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-grandchild-allow-same-origin.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-grandchild-frame-allow-top.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-grandchild-sandboxed-cross-origin-parent.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-grandchild-sandboxed.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-grandchild-unsandboxed-cross-origin-parent.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox-top-navigation-grandchild-unsandboxed-inherit.tentative.sub.window.js
+html/semantics/embedded-content/the-iframe-element/sandbox_001.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_002.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_004.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_005.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_012.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_013.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_014.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_015.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_016.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_017.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_018.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_019.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_023.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_024.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_025.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_026.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_027.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
 
 # `Location` and `hashchange`. The whole directory of `Location`, but for
 # what is `disabled`; `javascript:` URLs.

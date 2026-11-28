@@ -36,6 +36,7 @@ pub mod header_list;
 pub mod input;
 pub mod network;
 pub mod renderer;
+pub mod sandbox;
 pub mod viz;
 pub mod webdriver;
 
