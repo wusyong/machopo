@@ -125,7 +125,7 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 | `Machopo.navigateFromAddressBar` | 像在網址列輸入之後按 Enter |
 | `Machopo.waitForLoad` | 分頁最新的導覽載入完、顯示它的 frame 畫出來（`DidFinishLoad`）才回答；已經載入完的立刻回答。帶 session 時是那個 session 的分頁，沒帶時是顯示的分頁；藏在後面的分頁不畫 frame，載入完要等它顯示出來 |
 | `Machopo.dispatchWindowInput` | 給視窗輸入（視窗的 CSS px）：`move`（滑鼠移到那裡）、`click`（主按鍵按下、放開，一串連點的第一下）、`dblclick`（在那裡連點兩下，第二下是 double click）、`wheel`（`deltaX`、`deltaY`）、`key`（`key` 是 winit 的 `NamedKey` 的名字或一個字元，`modifiers` 照 CDP：Alt 1、Ctrl 2、Meta 4、Shift 8，`text` 是它打出的字）；給了才回答 |
-| `Machopo.waitForInputHandled` | 給目前的分頁的輸入都處理完（ack）才回答 |
+| `Machopo.waitForInputHandled` | 給目前的分頁的輸入都處理完（ack）才回答；分頁換了 renderer（導覽到別的網站）時，給舊的那個的輸入不再等 |
 | `Machopo.getTitle` | 目前的分頁的標題，分頁列上顯示的（`title`） |
 | `Machopo.getCursor` | 滑鼠所在的地方的游標，用 CSS 的關鍵字（`cursor`：`default` 是箭頭、`pointer` 是手指、`text` 是 I 形；`all-scroll` 和 `move` 一樣）：網頁上是 renderer 要的，工具列上是工具列的 |
 | `Machopo.queryElement` | `selector`（和 iframe 的 selector 路徑 `frames`）找到的元素：視窗座標的框（沒有框是 `null`）和 `textContent`，以及網頁 view 在視窗裡的位置、視窗的 scale |
@@ -141,6 +141,8 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 | `Machopo.clearElement` | Element Clear：不是可以編輯的控制項（唯讀、disabled、按鈕這類）是 `invalid element state`；不在畫面裡時捲進畫面（同 `Machopo.getElementClickPoint`），之後第一個框（大小是 0 也算）不在 viewport 裡是 `element not interactable`；空的不動，不然聚焦、清空、分派 `input` 和 `change`、blur |
 | `Machopo.captureElementScreenshot` | 元素不在畫面裡時捲進畫面（同 `Machopo.getElementClickPoint`），等畫出來之後截它在畫面裡的那部分，PNG 的 base64（`{value}`）；沒有任何部分在畫面裡是 `unable to capture screen` |
 | `Machopo.switchToFrame` | `frame` 裡的子 frame 的 id：`index` 是 `window[index]` 的（照樹的順序），`element` 是那個 iframe 的；沒有的話是 `no such frame`，兩個都給是 `invalid argument`。都沒給時是 `frame` 自己的 id（top-level 是 `null`），用來確認它還在 |
+
+要 renderer 回答的（`Machopo.queryElement`、`scrollIntoViewIfNeeded`、等 frame 的 `captureWindow`、`Page.captureScreenshot` 和 WebDriver 的方法）在 renderer 當掉時以 -32000 失敗；分頁的 renderer 換了時，和交給 renderer 的 DevTools 命令一樣：會跑 script 或改頁面的 WebDriver 方法（`executeScript`、`prepareSendKeys`、`clearElement`）以 `Inspected target navigated or closed` 失敗，其他的照送出的順序交給新的 renderer，回答的是新的文件（舊文件的元素參照在那裡是 `no such element`）。
 
 測試：`cargo test -p protocol --test it automation::`（JSON）、`cargo test -p shell --test it automation_pipe::`（`machopo` 的執行檔，經過 pipe；真的視窗（沒有 `--headless`）的那一個要顯示器，只在設了 `MACHOPO_WINDOW_TESTS` 時跑，`python3 scripts/test.py scenarios --window` 會跑它）。情境（`tests/scenarios/`）經過同一個 session，也是它的回歸測試。
 

@@ -37,6 +37,12 @@ use winit::keyboard::ModifiersState;
 
 use crate::scenario::{Command, Platform, Step, Target};
 
+/// The host mapping (`--host-resolver-rules`) a scenario's browser has:
+/// every name under `.test` is this machine, where `navigate-site`'s server
+/// is. No real host is under `.test`, so nothing else a scenario loads
+/// changes.
+pub const SITE_HOST_RULES: &str = "MAP *.test 127.0.0.1";
+
 /// How long a wait may take, until a scenario's `timeout` says otherwise.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -174,6 +180,7 @@ pub fn run(steps: &[Step], context: &Context, client: &Client) -> Result<(), Fai
         before_input: None,
         frames: Vec::new(),
         servers: Vec::new(),
+        site: None,
     };
     // The steps that run here, with this platform's shortcuts.
     let mut platform = Platform::All;
@@ -223,6 +230,37 @@ fn gives_input(command: &Command) -> bool {
     )
 }
 
+/// The routes of `navigate-site`'s server: each file in `dir`, at `/` and
+/// its name.
+fn site_routes(dir: &std::path::Path) -> Result<HashMap<String, net::test_server::Route>, String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut routes = HashMap::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !path.is_file() {
+            continue;
+        }
+        let body =
+            std::fs::read(&path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
+        let route = net::test_server::Route::ok(mime_type(&path), body);
+        routes.insert(format!("/{name}"), route);
+    }
+    Ok(routes)
+}
+
+/// What a scenario's server says a file is.
+fn mime_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html" | "htm") => "text/html",
+        Some("css") => "text/css",
+        Some("js") => "text/javascript",
+        _ => "text/plain",
+    }
+}
+
 struct Runner<'a> {
     client: &'a Client,
     context: &'a Context,
@@ -237,6 +275,9 @@ struct Runner<'a> {
     /// The servers of the pages `navigate-paused` went to, kept for the
     /// scenario: their pages may still be loading at its end.
     servers: Vec<net::test_server::TestServer>,
+    /// `navigate-site`'s server, once one has asked for it, and the
+    /// directory it serves.
+    site: Option<(net::test_server::TestServer, PathBuf)>,
 }
 
 impl Runner<'_> {
@@ -254,18 +295,44 @@ impl Runner<'_> {
                 let file = self.context.base.join(path);
                 let body = std::fs::read(&file)
                     .map_err(|e| format!("can't read {}: {e}", file.display()))?;
-                let mime_type = match file.extension().and_then(|e| e.to_str()) {
-                    Some("html" | "htm") => "text/html",
-                    _ => "text/plain",
-                };
-                let route =
-                    net::test_server::Route::ok(mime_type, body).with_pause_in_body(*at, *pause);
+                let route = net::test_server::Route::ok(mime_type(&file), body)
+                    .with_pause_in_body(*at, *pause);
                 let server = net::test_server::TestServer::start(
                     [("/".to_owned(), route)].into_iter().collect(),
                 )
                 .map_err(|e| format!("the page's server didn't start: {e}"))?;
                 let url = server.url("/");
                 self.servers.push(server);
+                self.call(
+                    Method::MachopoNavigateFromAddressBar(Navigate { url }),
+                    "navigate",
+                )
+                .map(drop)
+            }
+            Command::NavigateSite { host, path } => {
+                let file = self.context.base.join(path);
+                let name = file
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| format!("{path} names no file"))?
+                    .to_owned();
+                let dir = file.parent().unwrap_or(&self.context.base).to_owned();
+                let server = match &self.site {
+                    Some((server, served)) if *served == dir => server,
+                    Some((_, served)) => {
+                        return Err(format!(
+                            "`navigate-site` serves one directory a scenario: {} already, not {}",
+                            served.display(),
+                            dir.display()
+                        ));
+                    }
+                    None => {
+                        let server = net::test_server::TestServer::start(site_routes(&dir)?)
+                            .map_err(|e| format!("the sites' server didn't start: {e}"))?;
+                        &self.site.insert((server, dir)).0
+                    }
+                };
+                let url = server.url_for_host(host, &format!("/{name}"));
                 self.call(
                     Method::MachopoNavigateFromAddressBar(Navigate { url }),
                     "navigate",

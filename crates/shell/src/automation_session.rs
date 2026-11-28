@@ -184,6 +184,74 @@ struct Forwarded {
     order: u64,
 }
 
+/// A request of the automation's own for a tab's renderer, waiting for
+/// its answer: what to send again should another renderer take the tab's
+/// place first (`resend_to_renderer`), in the order they were sent.
+struct SentToRenderer {
+    tab: TabId,
+    renderer: browser::RendererId,
+    request: RendererRequest,
+}
+
+/// What [`SentToRenderer`] sends.
+enum RendererRequest {
+    /// `Machopo.queryElement`'s, by query id.
+    Query {
+        id: u64,
+        frames: Vec<String>,
+        selector: String,
+    },
+    /// A visual state (`Machopo.captureWindow`, a page's capture), by id.
+    VisualState(u64),
+    /// `Machopo.scrollIntoViewIfNeeded`'s scroll, and its visual state.
+    Scroll {
+        id: u64,
+        frames: Vec<String>,
+        selector: String,
+    },
+    /// A WebDriver method's, by request id.
+    WebDriver {
+        id: u64,
+        frame: Option<String>,
+        command: WebDriverCommand,
+    },
+}
+
+impl RendererRequest {
+    /// Which answer it waits for: its kind of id, and the id.
+    fn answer(&self) -> (Answer, u64) {
+        match self {
+            Self::Query { id, .. } => (Answer::Query, *id),
+            Self::VisualState(id) | Self::Scroll { id, .. } => (Answer::VisualState, *id),
+            Self::WebDriver { id, .. } => (Answer::WebDriver, *id),
+        }
+    }
+}
+
+/// The renderer's answers [`SentToRenderer`] waits for, each kind with ids
+/// of its own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Query,
+    VisualState,
+    WebDriver,
+}
+
+/// Whether a WebDriver command may run the page's script or change the
+/// page (an input's events, a field cleared): one on its way as the tab's
+/// renderer is replaced fails, as such DevTools commands do, rather than
+/// act on another document. The others ask about the page, and go to the
+/// new renderer: an element of the document before is no such element
+/// there.
+fn changes_page(command: &WebDriverCommand) -> bool {
+    matches!(
+        command,
+        WebDriverCommand::ExecuteScript { .. }
+            | WebDriverCommand::ElementSendKeys { .. }
+            | WebDriverCommand::ElementClear { .. }
+    )
+}
+
 /// The commands that may run the page's script (Chromium's
 /// `MayCauseJavascriptExecution`): one on its way as the tab's renderer is
 /// replaced fails ([`TARGET_CLOSED`]); the others go to the new renderer.
@@ -392,6 +460,9 @@ pub struct AutomationSession {
     forwarded: HashMap<(String, i32), Forwarded>,
     /// Numbers the commands forwarded from 1, in the order they came.
     forward_order: SequenceNumber<u64>,
+    /// The automation's own requests for tabs' renderers, waiting for
+    /// their answers, in the order they were sent.
+    sent: Vec<SentToRenderer>,
     /// `Browser.close` was answered: the embedder ends the browser.
     close: bool,
     /// The browser has the platform's window (`in_platform_window`).
@@ -552,6 +623,7 @@ impl AutomationSession {
             input_handled: Vec::new(),
             webdriver_ids: SequenceNumber::starting_at(1),
             webdriver: HashMap::new(),
+            sent: Vec::new(),
             forwarded: HashMap::new(),
             forward_order: SequenceNumber::starting_at(1),
             close: false,
@@ -972,6 +1044,7 @@ impl AutomationSession {
                 );
             }
             RendererHostMsg::QueryElementResult { query_id, element } => {
+                self.answered(Answer::Query, *query_id);
                 let Some((_, reply)) = self.queries.remove(query_id) else {
                     return;
                 };
@@ -1007,6 +1080,7 @@ impl AutomationSession {
             }
             // The frame showing it is ahead of this request in Viz's queue.
             RendererHostMsg::WebDriverReply { request_id, result } => {
+                self.answered(Answer::WebDriver, *request_id);
                 let Some((_, reply)) = self.webdriver.remove(request_id) else {
                     return;
                 };
@@ -1032,6 +1106,7 @@ impl AutomationSession {
                 );
             }
             RendererHostMsg::VisualStateReady { request_id } => {
+                self.answered(Answer::VisualState, *request_id);
                 if let Some(capture) = self.page_captures.remove(request_id) {
                     copy_page(browser, capture);
                 } else if let Some((_, reply)) = self.copies.remove(request_id) {
@@ -1108,6 +1183,7 @@ impl AutomationSession {
                     .is_some_and(|contents| contents.is_navigating(id))
             });
         let gone = || Err(Error::new(SERVER_ERROR, "the tab's renderer has gone"));
+        self.sent.retain(|sent| sent.tab != tab);
         let (queries, kept) = std::mem::take(&mut self.queries)
             .into_iter()
             .partition(|(_, (of, _))| *of == tab);
@@ -1529,6 +1605,18 @@ impl AutomationSession {
             }
             if !crashed {
                 self.forward_to_renderer(contents);
+                self.resend_to_renderer(contents);
+                // Input that went to a renderer the tab's has replaced is
+                // no longer in flight, and no ack comes for it.
+                if contents.input_in_flight() == 0 {
+                    let (done, waiting) = std::mem::take(&mut self.input_handled)
+                        .into_iter()
+                        .partition(|(of, _)| *of == tab);
+                    self.input_handled = waiting;
+                    for (_, reply) in done {
+                        reply.done();
+                    }
+                }
             }
             let loader = contents.latest_navigation_id();
             let known = self.loaders.insert(tab, loader);
@@ -1649,6 +1737,7 @@ impl AutomationSession {
         }
         self.sessions
             .retain(|_, attached| now.contains(&attached.tab));
+        self.sent.retain(|sent| now.contains(&sent.tab));
         self.tabs = now;
         for tab in newly_crashed {
             self.renderer_gone(tab, browser);
@@ -1684,6 +1773,68 @@ impl AutomationSession {
             }
             contents.devtools_message(&key.0, forwarded.message.clone(), forwarded.interrupt);
             forwarded.renderer = renderer;
+        }
+    }
+
+    /// `request` has gone to `contents`' renderer, and waits for its
+    /// answer.
+    fn sent_to(&mut self, contents: &WebContents, request: RendererRequest) {
+        self.sent.push(SentToRenderer {
+            tab: contents.tab(),
+            renderer: contents.renderer_id(),
+            request,
+        });
+    }
+
+    /// The renderer has answered: nothing to send again.
+    fn answered(&mut self, answer: Answer, id: u64) {
+        self.sent
+            .retain(|sent| sent.request.answer() != (answer, id));
+    }
+
+    /// The automation's own requests on their way to a renderer
+    /// `contents`' has replaced, as `forward_to_renderer` has DevTools'
+    /// commands: a WebDriver command that may change the page fails
+    /// ([`TARGET_CLOSED`]); the others go to this renderer, in the order
+    /// they were sent. The one before, unloading, answers nothing more.
+    fn resend_to_renderer(&mut self, contents: &WebContents) {
+        let tab = contents.tab();
+        let renderer = contents.renderer_id();
+        let mut failed = Vec::new();
+        for sent in &mut self.sent {
+            if sent.tab != tab || sent.renderer == renderer {
+                continue;
+            }
+            sent.renderer = renderer;
+            match &sent.request {
+                RendererRequest::Query {
+                    id,
+                    frames,
+                    selector,
+                } => contents.query_element(*id, frames, selector),
+                RendererRequest::VisualState(id) => contents.request_visual_state(*id),
+                RendererRequest::Scroll {
+                    id,
+                    frames,
+                    selector,
+                } => {
+                    contents.scroll_into_view_if_needed(frames, selector);
+                    contents.request_visual_state(*id);
+                }
+                RendererRequest::WebDriver { id, command, .. } if changes_page(command) => {
+                    failed.push(*id);
+                }
+                RendererRequest::WebDriver { id, frame, command } => {
+                    contents.webdriver(*id, frame.clone(), command.clone());
+                }
+            }
+        }
+        for id in failed {
+            self.answered(Answer::WebDriver, id);
+            self.element_captures.remove(&id);
+            if let Some((_, reply)) = self.webdriver.remove(&id) {
+                reply.answer(Err(Error::new(SERVER_ERROR, TARGET_CLOSED)));
+            }
         }
     }
 
@@ -2236,6 +2387,7 @@ impl AutomationSession {
         };
         let state = self.visual_states.get_next();
         contents.request_visual_state(state);
+        self.sent_to(contents, RendererRequest::VisualState(state));
         self.page_captures
             .insert(state, PageCapture { tab, reply, clip });
     }
@@ -2302,6 +2454,14 @@ impl AutomationSession {
                 self.queries
                     .insert(query, (tab, self.reply(client, command)));
                 contents.query_element(query, &params.frames, &params.selector);
+                self.sent_to(
+                    contents,
+                    RendererRequest::Query {
+                        id: query,
+                        frames: params.frames.clone(),
+                        selector: params.selector.clone(),
+                    },
+                );
                 Dispatched::Later
             }
             // The visual state asked for after the scroll comes with the
@@ -2312,6 +2472,14 @@ impl AutomationSession {
                 self.scrolls
                     .insert(state, (tab, self.reply(client, command)));
                 contents.request_visual_state(state);
+                self.sent_to(
+                    contents,
+                    RendererRequest::Scroll {
+                        id: state,
+                        frames: params.frames.clone(),
+                        selector: params.selector.clone(),
+                    },
+                );
                 Dispatched::Later
             }
             Method::MachopoCaptureWindow(params) if params.now => {
@@ -2323,6 +2491,7 @@ impl AutomationSession {
                 self.copies
                     .insert(state, (tab, self.reply(client, command)));
                 contents.request_visual_state(state);
+                self.sent_to(contents, RendererRequest::VisualState(state));
                 Dispatched::Later
             }
             other => unreachable!("not the Machopo domain's: {}", other.name()),
@@ -2364,7 +2533,16 @@ impl AutomationSession {
         if matches!(command.method, Method::MachopoCaptureElementScreenshot(_)) {
             self.element_captures.insert(request_id);
         }
-        contents.webdriver(request_id, webdriver_frame(&command.method), request);
+        let frame = webdriver_frame(&command.method);
+        contents.webdriver(request_id, frame.clone(), request.clone());
+        self.sent_to(
+            contents,
+            RendererRequest::WebDriver {
+                id: request_id,
+                frame,
+                command: request,
+            },
+        );
         Dispatched::Later
     }
 

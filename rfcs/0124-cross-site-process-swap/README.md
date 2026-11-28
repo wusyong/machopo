@@ -1,7 +1,7 @@
 # RFC 0124：跨網站的導覽換 renderer
 
 - 開始日期：2026-11-27
-- 狀態：🚧 已排程：2026-11-27
+- 狀態：✅ 已完成：2026-11-28（Linux：Fedora 45）
 - 進度和驗收：`progress.md`
 - 細節：`details.md`
 
@@ -31,9 +31,11 @@ RFC 0122 路線圖的 C（M2 的第一份）。
 
 要解決的 `docs/limitations.md` 的限制（做完時照這份清單改）：
 
-- 「隔離」的「名稱表和屬性值的表在同一個 renderer 裡共用」：同一個分頁先後導覽過的**不同網站**不再共用（各自的 process）；同一個網站的網頁之間、頁面和它跨網站的 iframe 之間照舊。
-- 「隔離」的「新文件畫出來之前留著舊的畫面，不看是不是同一個 origin」：照 Chromium 的條件（已決定的事項第 7 條），刪掉。
-- 「GC 和 `dom`」的「名稱表只增不減……同一個分頁導覽到別的網頁也不清」：跨網站的導覽之後跟著舊的 process 還給系統，同一個網站裡的照舊。
+- 「隔離」的「名稱表和屬性值的表在同一個 renderer 裡共用」：同一個分頁先後導覽過的**不同網站**不再共用（各自的 process）；同一個網站的網頁之間、頁面和它跨網站的 iframe 之間照舊。改了。
+- 「隔離」的「新文件畫出來之前留著舊的畫面，不看是不是同一個 origin」：照 Chromium 的條件（已決定的事項第 7、19 條），刪掉了。
+- 「GC 和 `dom`」的「名稱表只增不減……同一個分頁導覽到別的網頁也不清」：跨網站的導覽之後跟著舊的 process 還給系統，同一個網站裡的照舊。改了。
+
+新的限制：舊頁面在 `pagehide`、`unload` 裡送出的請求跟著舊的 process 取消（第 6 條）、`--single-process` 時卡在原生程式碼裡的舊 renderer 留著（第 11 條），寫在 `docs/limitations.md`。
 
 ## 設計概要
 
@@ -50,32 +52,38 @@ RFC 0122 路線圖的 C（M2 的第一份）。
 
 ## 詳細設計
 
-現況的盤點、Chromium 的做法和量到的數字在 `details.md`。這一節先寫已經看得出來的骨架，各項的做法在「待決定」定了之後補上。
+開始時的盤點、Chromium 的做法和量到的數字在 `details.md`。
 
 ### 現在最接近的路：`relaunch`
 
-renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「換一個 renderer」：新的 frame sink、啟動新的 `RenderProcessHost`、放掉舊的、把分頁的狀態（DevTools 的 token、大小、螢幕上的位置、可見、focus）再送一次。跨網站的換從它推廣，多出來的是：
+renderer 當掉之後的下一次導覽，`WebContents::relaunch` 原本就會「換一個 renderer」：新的 frame sink、啟動新的 `RenderProcessHost`、放掉舊的、把分頁的狀態（DevTools 的 token、大小、螢幕上的位置、可見、focus）再送一次。跨網站的換從它推廣（兩者共用 `replace_renderer`），多出來的是：
 
-- **決定的時機**：`relaunch` 在導覽開始時；跨網站的要看到最後的網址（redirect 之後）才知道。第 1 段把導覽在開始時綁定 renderer 的 `Committer` 換成只有參數的 `CommitParams`，commit 時由分頁當時的 renderer 送（`RenderProcessHost::commit_navigation`）；renderer 在那之前不在了，就先 `relaunch`（第 13 條）。
+- **決定的時機**：`relaunch` 在導覽開始時；跨網站的要看到最後的網址（redirect 之後）才知道。導覽原本在開始時綁定 renderer 的 `Committer`，換成只有參數的 `CommitParams`，commit 時由分頁當時的 renderer 送（`RenderProcessHost::commit_navigation`）；renderer 在那之前不在了，就先 `relaunch`（第 13 條）。
 - **換的順序**：commit 時換 renderer，要在 frame 樹記下「正在 commit 哪一筆」（`FrameTree::committing`）之前清空 frame 樹、換好 renderer，否則新的 renderer 回報 commit 時 Browser 找不到那一筆，當成壞訊息；網址列在那一段顯示的是那一筆（`visible_url`）。
 - **舊的 renderer 還活著**：要叫它跑 `unload`、等它、逾時結束它；它在這段時間送來的訊息不能被當成新的 renderer 的（`RendererId` 和 `is_current_renderer` 已經在擋）。
-- **舊的畫面**：`relaunch` 直接作廢舊的 sink（那時本來就是 sad tab）；跨網站的換要決定中間顯示什麼。
-- **DevTools 的 session**：原本靠 `is_crashed` 從 `true` 變回 `false` 才重新接上，換 process 沒有「當掉」這一步。第 1 段改成自動化的 session 記著每個分頁上次的 renderer（`WebContents::renderer_id`），不同了就重新接上，只重送 `Page.enable` 和 lifecycle（其餘的狀態是第 2 段）。`Page.navigate` 和 `Machopo.waitForLoad` 在 renderer 不在了時，若等的是繼續的那一次導覽就繼續等。
-- **`headless` 和視窗**：`headless`（reftest 走的路）的畫面跟著換 sink、視窗清掉跟著舊 renderer 的 UI 狀態（游標、滑鼠的 capture、選單），在第 3 段做：第 1 段結束時換 renderer 只發生在 renderer 不在了之後，那時 `headless` 本來就以錯誤結束、視窗在 `RendererGone` 時清掉了，測不到它們。
+- **舊的畫面**：`relaunch` 直接作廢舊的 sink（那時本來就是 sad tab）；跨網站的換照第 7、18、19 條（「畫面」）。
+- **DevTools 的 session**：原本靠 `is_crashed` 從 `true` 變回 `false` 才重新接上，換 process 沒有「當掉」這一步。自動化改成記著每個分頁上次的 renderer（`WebContents::renderer_id`），不同了就處理還在路上的命令（第 15 條）；session 本身由 `WebContents` 接到新的 renderer 上（「DevTools 的 session」）。`Page.navigate` 和 `Machopo.waitForLoad` 在 renderer 不在了時，若等的是繼續的那一次導覽就繼續等。
+- **`headless` 和視窗**：`headless`（reftest 走的路）的畫面跟著換 sink、視窗清掉跟著舊 renderer 的 UI 狀態（游標、滑鼠的 capture、選單）；`relaunch` 時不用，那時 `headless` 本來就以錯誤結束、視窗在 `RendererGone` 時清掉了（「換」）。
 
 ### 規則
 
 `browser` 的 `site_info.rs`（第 17 條）：`SiteInfo::of_url`（`about:blank` 沒有 site；其他 `about:` 照名字；`file:` 一個；其他照 `site::Site`，解析不了的是新的 opaque）和 `swaps`（這個 renderer 的 `SiteInfo`、導覽的 `FrameLoadType`、最後的網址的 `SiteInfo`）：重新整理不換；任一邊沒有 site 不換；其餘不同就換。`WebContents::commit` 對 main frame 的文件問它（錯誤頁照它要去的網址），換了之後第一次有 site 的 commit 把 site 記在 `RenderProcessHost` 上。
 
-### 換（第 3a 段）
+### DevTools 的 session
+
+- 狀態（第 14 條）：renderer 的六個 agent 和 V8 的 inspector（rusty_v8 的 fork 接出的 `V8InspectorSession::state()`）在命令改了狀態時寫出，renderer 送 `RendererHostMsg::DevToolsSessionState`（超過 1 MiB 是壞訊息）；`WebContents` 記著 session 和最後的狀態，換 renderer 時在送 commit 之前用 `DevToolsAttach` 交還，新文件的第一個請求已經在 `Network` 的眼裡。依網址的斷點由 `bindings` 記下 `setBreakpointByUrl`、重新接上時用同樣的 id 重送；script 暫停或被打斷時 V8 處理的命令也回報狀態；同一個 renderer 裡換 engine（JS 和 wasm）時照最後的狀態接上。
+- 還沒回答的命令（第 15、16 條）：自動化記著每個命令送給了哪個 renderer；當掉時以 `"Target crashed"` 失敗，換了時可能跑 script 的五個以 `"Inspected target navigated or closed"` 失敗、其餘的送給新的 renderer（`forward_to_renderer`）；分頁沒有 renderer 時送來的立刻以 `"Target crashed"` 回答。
+- 自動化自己送給 renderer、等它回答的請求（`Machopo.queryElement`、visual state、捲動、WebDriver 的方法）照第 21 條：記著送給了哪個 renderer 和重送要的參數（`SentToRenderer`），換了時會跑 script 或改頁面的 WebDriver 方法失敗，其餘的照順序重送（`resend_to_renderer`）。送給被換掉的 renderer 的 input 不會有 ack：`Machopo.waitForInputHandled` 在分頁的 `input_in_flight` 歸零時（`swap_renderer` 歸零）回答，不等 ack。
+
+### 換
 
 - `WebContents::swap_renderer`：`replace_renderer`（和當掉之後的 `relaunch` 共用：新的 frame sink、新的 `RenderProcessHost`、把分頁的狀態和 DevTools 的 session 先告訴它），舊的交給 `RenderProcessHost::unload`；frame 樹清成只剩 main frame（舊文件的子 frame 跟著走）、還沒 ack 的 input 歸零；commit 的參數拿掉 renderer 自己的導覽編號（`begin_id` 是舊 renderer 的）。啟動失敗時導覽停掉，分頁留在原來的頁面（第 6 條）。
 - `RenderProcessHost::unload`：IO thread 不再把它的訊息往上轉，送 `RendererMsg::Unload`，在一條 `UnloadTimer` thread 上等它結束：process 最多 500 ms（之後 kill），thread 等 500 ms 之後每 10 ms 打斷它的 script，5 秒還不結束就放著（第 11 條）。`Detached` 的不等。
 - renderer：`Unload` 和 `Shutdown` 一樣結束暫停、讓等著 Browser 回答的呼叫放棄（`task_queue`），main thread 對最上層的文件跑 `unload_document`（`pagehide`、`unload`，再來子 frame 的），然後離開 event loop。
 - 嵌入的人：`headless` 收到新 sink 的 `RegisterFrameSinkId` 時把輸出的 root 換成它（`Display::set_root_frame_sink`），舊的 `InvalidateFrameSinkId` 時拿掉；視窗在每個分頁事件之後問 `WebContents::take_renderer_replaced`，換了就清掉游標、滑鼠的 capture 和選單（選單不回答：問的 renderer 不在了）。
-- 自動化：`forward_to_renderer`（第 2a 段寫的）在換了時把還沒回答的命令照第 15 條處理。
+- 自動化：還沒回答的命令照第 15 條（「DevTools 的 session」）。
 
-### 畫面（第 3b 段）
+### 畫面
 
 - renderer 在最上層的文件第一次有 sticky activation 時（input 分派之後看）送 `RendererHostMsg::DidReceiveUserActivation`，每份文件一次；`WebContents` 記著（`main_frame_activated`），main frame 的新文件回報 commit 時歸零。
 - `WebContents::allows_paint_holding`（第 19 條）：分頁還沒 commit 過、舊頁面被操作過、或新舊同一個 origin。`commit` 對 main frame 算一次：結果放進 `CommitParams`（`CommitNavigation` 的 `paint_holding`，renderer 不能留時把 4 秒的計時改成現在，`end_paint_holding`），換 renderer 時也交給 `swap_renderer`。
@@ -84,12 +92,14 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 
 ### 測試
 
-- 規則的函式：照表的單元測試（每一種網址、每一種導覽）。
-- `browser` 的整合測試（`Detached` 的 renderer，直接餵訊息）：跨網站的 commit 送給新的 renderer、舊的收到 unload 的訊息、逾時、舊的 renderer 之後送的訊息不算。
-- `shell` 的整合測試（真的 renderer，用 `--host-resolver-rules` 做兩個網站）：`pagehide`、`unload` 有跑（handler 裡寫 `localStorage`，換到的頁面回到同一個網站時讀得到）、上一頁回到前一個網站、`sessionStorage` 留著、DevTools 的 session 接得上。
-- 情境：使用者看得到的（點連結到別的網站、上一頁、畫面中間不閃）。
-- WPT：跨 origin 導覽的那些目錄經過 machopodriver 跑的是真的 process，換壞了它會失敗。
-- 量測工具的測試（`scripts/bench`）：它們照 process 找 renderer。
+測試的清單和 mutation test 的結果在 `progress.md`。
+
+- 規則的函式：`site_info` 照表的單元測試（每一種網址、每一種導覽）。
+- `browser` 的整合測試：`process_swap.rs`（跨網站的 commit 在新的 renderer、回到之前的網站又是新的、留著的幾種、舊文件的子 frame、fallback 的 sink）、導覽的 paint holding、storage 跨過換 renderer、DevTools 的狀態（`devtools_session.rs`）、renderer 在導覽途中不在了（`renderer_gone.rs`）。
+- `shell` 的整合測試（真的 renderer，`127.0.0.1` 和 `localhost` 兩個網站）：`pagehide`、`unload` 有跑（process 和 thread 兩種、在 debugger 裡暫停的、不結束的被結束）、還在路上的 DevTools 命令、換過去的 input、視窗清掉舊的 UI、換的中間畫出來的像素、`headless` 的輸出。
+- 情境 `sites.txt`（第 20 條的 `navigate-site`：`a.test` 和 `b.test`）：點連結到別的網站、上一頁和下一頁、新的 renderer 收得到 input、`sessionStorage` 留著；`--window` 時截圖給人看換的中間。
+- WPT：跨 origin 導覽的目錄經過 machopodriver 跑的是真的 process；`unloading-documents/` 整個通過的 12 個加進清單。
+- 量測工具的測試（`scripts/bench`）：它們照 process 找 renderer，都只導覽到一個 site，不會碰到換。
 
 ### 分階段
 
@@ -98,9 +108,9 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 1. **鋪路**：commit 時才定送給哪個 renderer，renderer 在導覽途中不在了照第 13 條（原本卡在 sad tab 的這一種行為改了，其餘不變）；自動化照分頁的 renderer 是哪一個重新接上 DevTools 的 session，不再靠 `crashed` 變回來（`headless` 和視窗在第 3 段，見「現在最接近的路：`relaunch`」）。用「當掉之後重新載入」和「載入途中當掉」驗證。
 2. **DevTools 的 session 的狀態跨過換 renderer**：同樣先用當掉之後重新載入驗證。
 3. **規則和換**：跨網站的 commit 在新的 process；舊文件的 `unload`；中間的畫面和同一個 renderer 裡跨 origin 的 paint holding（第 7 條）；`headless` 跟著換 sink、視窗清掉跟著舊 renderer 的 UI 狀態。
-4. **收尾**：量測工具、WPT 的預期結果、文件。
+4. **收尾**：量測工具、WPT 的預期結果、情境（第 20 條）、文件。
 
-每一段做完 `main` 上的行為都是一致的：前兩段不改變什麼時候換，第三段打開時工具已經接得上。第 4 段另外有一件要在別的機器上做的：在 macOS 和 Windows 量 renderer 啟動的時間（第 5 條）。
+每一段做完 `main` 上的行為都是一致的：前兩段不改變什麼時候換，第三段打開時工具已經接得上。第 3 段做的時候分成 3a（換）和 3b（畫面），分開審查。在 macOS 和 Windows 量 renderer 啟動的時間（第 5 條）要在那兩台機器上做，還沒做（「之後的可能」）。
 
 ## 缺點
 
@@ -115,7 +125,7 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 - **每次導覽都換**（不看 site）：規則最簡單，但同一個網站裡每點一次都多 11 ms、丟掉快取，沒有換到安全上的好處（同一個 site 本來就互相讀得到）。
 - **只換 Browser 發起的**（網址列、書籤；Chromium 沒有 site isolation 時的做法）：擋不住頁面自己設 `location` 把分頁導覽走的情況，正是動機裡的那個洞。
 
-其餘的選擇在「待決定」。
+其餘的選擇在「已決定的事項」。
 
 ## 先例
 
@@ -163,17 +173,17 @@ renderer 當掉之後的下一次導覽，`WebContents::relaunch` 已經會「�
 17. **資料模型：只建 `SiteInfo`，記在 `RenderProcessHost` 上（M1）**（2026-11-28，使用者決定；第 3 段開始時）：`browser` 的 `SiteInfo` 是一個值（Chromium 的 `SiteInfo`）：網頁的 `Site`、所有 `file:` 的一個（第 1 條）、內建頁照名字（第 3 條）、opaque 的每次都不同（網址列輸入的 `data:`、`blob:null/…`）。`RenderProcessHost` 記著它的 `site_info: Option<SiteInfo>`，`None` 是還沒裝過網站（新分頁的第一次導覽直接用它，第 4 條），第一次 commit 網頁時寫入；「換不換」是一個不碰 process 的函式（這個 renderer 的 `site_info`、這次導覽、最後的網址）。理由：名字對得上 Chromium；下一份的 process lock 直接從它算（Chromium 的 `ProcessLock::FromSiteInfo`，記在 process 上）；沒有共用的物件，不用 `Rc`。不選現在就建 `SiteInstance`、`BrowsingInstance`（M2：分頁不共用（第 10 條）、沒有 `window.open` 時，每個分頁剛好一個 `BrowsingInstance`、每個 renderer 剛好一個 `SiteInstance`，兩層都只包著一個值，共用它們要說不出理由的 `Rc`）；不選不建型別、在 `WebContents` 裡直接比 `Site`（M3：「這個 process 是哪個 site 的」沒有名字，`file:` 和內建頁的特例散在比較裡，process lock 要重新整理出來）。做 `window.open` 那一份時補 `BrowsingInstance` 和包著 `SiteInfo` 的 `SiteInstance`（RFC 0122 的 `roadmap.md` 的 W）。
 18. **換 process 時舊的畫面：嵌入的 quad 多帶一個 fallback（F1，Chromium 的 `SurfaceRange`）**（2026-11-28，使用者決定；第 3 段）：`Material::Surface` 多一個 `fallback: Option<SurfaceId>`；aggregator 先畫 primary 的 sink 最新的 frame，沒有時畫 fallback 的 sink 的，都沒有才畫背景色。`WebContents` 換 process 時，舊頁面被操作過（第 7 條）就先不作廢舊的 sink、把它記成 fallback，嵌入的人（視窗、`headless`）照 `WebContents` 給的兩個嵌入；新的 sink 第一次有 frame 時 Viz 告訴 Browser（新的通知，Chromium 的 `OnFirstSurfaceActivation`），Browser 才作廢舊的 sink（新的 renderer 最多 4 秒一定交出 frame，所以一定會作廢）。理由：和 Chromium 同一套（`SurfaceManager::GetLatestInFlightSurface` 先找 primary、找不到退回開頭那組，新舊可以是不同的 frame sink；`RenderFrameHostManager::CommitPending` 的 `TakeFallbackContentFrom`，不允許留時 `ForceFirstFrameAfterNavigationTimeout` 拿掉 fallback）；新的 frame 一到 Viz 自己換過去，不等 Browser 的下一輪，嵌入的人不用各自寫什麼時候換。代價：協定的 quad 多一個欄位、aggregator 在 primary 沒有 frame 時多查一次、多一則 Viz 到 Browser 的通知。不選 Browser 先嵌舊的、知道新的有 frame 再換（F2：一樣要那則通知，晚一個 UI 的 frame，每個嵌入的人各寫一次）；不選 Viz 把舊的 frame 複製給新的 sink（F3：資源是舊的 renderer 的，擁有權和釋放會亂；Chromium 沒有這樣做）。
 19. **paint holding 能不能留由 Browser 判斷，commit 時告訴 renderer（H1）**（2026-11-28，使用者決定；第 3 段開始時查證 Chromium 之後，改第 7 條「同一個 renderer 那一半放在 renderer」）：Browser 送 commit 時用一個函式判斷（初始的空白文件、新舊同一個 origin、或舊頁面有過使用者的操作；Chromium 的 `navigator.cc` 的 `allow_main_frame_paint_holding`），換 process（第 18 條）和同一個 renderer 都用它；同一個 renderer 時結果放進 `CommitNavigation`，不能留時 renderer 不等 4 秒、馬上交一個只有背景的 frame（現在逾時時的 `commit_empty_frame`），能留時照現在。新文件的 origin 是 Browser 定的；舊頁面有沒有被操作過由 renderer 告訴 Browser（第 7 條，換 process 本來就要），點擊記下操作和它發起的導覽在同一條通道、操作的通知在前，Browser 判斷時已經知道。理由：規則只有一份；和 Chromium 一樣由 Browser 判斷（它在 renderer 回報 commit 時判斷，不能留時 `ForceFirstFrameAfterNavigationTimeout` 拿掉 fallback）；之後的 process lock 不用信 renderer 說可以留。代價：commit 多一個 bool。不選 renderer 自己判斷（H2，第 7 條原本寫的：同一條規則兩份，Browser 一份、renderer 一份）；不選整個照 Chromium 改成 Browser 和 Viz 的 fallback、Browser 的計時器（H3：Chromium 的 paint holding 整個在 Browser 和 Viz，同一個 renderer 裡也是 Viz 先畫舊的 surface；machopo 的是 renderer 暫時不交 frame。改它是重寫一個已經在用、有測試的功能，每次導覽都要換 `LocalSurfaceId`，這份不需要）。H3 留給 OOPIF 的子 frame 的畫面那一份重新考慮（RFC 0122 的 `roadmap.md` 的 O2）：那時 Browser 已經替每個 frame 管 surface，子 frame 也要用 fallback（Chromium 對子 frame 只在同一個 origin 時留），統一的理由最充分；這裡的判斷函式照用。
+20. **情境用兩個主機名稱做出兩個網站（S2）**（2026-11-28，使用者決定；第 4 段開始時）：情境多一個指令 `navigate-site <主機> <路徑>`：情境自己的 server（`net` 的 test server，每個情境一個）用 HTTP 提供那個檔案所在的資料夾，所有 `*.test` 的主機名稱都對到 `127.0.0.1`（沒有平台視窗時是 `net` 的 host mapping，`--window` 時是 `--host-resolver-rules`），頁面照 `location.port` 寫出 `http://b.test:<port>/…` 的連結。`.test` 是保留給測試的頂級網域（RFC 6761），`a.test` 和 `b.test` 是不同的 site。理由：點連結到別的網站、上一頁回到前一個網站、真的視窗裡換的中間的截圖都做得到；和 Chromium 的 browser test 一樣（`host_resolver()->AddRule("*", "127.0.0.1")`、`EmbeddedTestServer::GetURL("a.com", …)`）。代價：`scenario.rs` 和 `automation.rs` 多一個指令和它的解析測試、情境的 README。不選只用現有的指令（S1：網址列在 `file:` 和 `about:demo` 之間換，沒有點連結跨網站、也就沒有被操作過時留著的舊畫面）；不選不寫情境（S3：違反「看得到的行為寫成情境」）。
+21. **換 renderer 時自動化自己還在等舊 renderer 回答的請求，照第 15 條分兩種（W1）**（2026-11-28，使用者決定；第 4 段的 `--window` 情境找到的）：`Machopo.queryElement`、visual state（`captureWindow`、`Page.captureScreenshot`、元素的截圖）、`scrollIntoViewIfNeeded` 和 WebDriver 的方法原本只照分頁記著，renderer 當掉時失敗，換掉時沒人處理、一直等（舊的 renderer 收到 `Unload` 就不再回答；真的 process 比較慢，查詢比較常落在換的那一刻）。改成記著送給了哪個 renderer：會跑頁面 script 或改頁面的 WebDriver 方法（execute script、send keys、clear）以 `"Inspected target navigated or closed"` 失敗，其餘的照送出的順序交給新的 renderer，回答的是新的文件（舊文件的元素參照是 `no such element`）。理由：和 DevTools 的命令同一條規則（Chromium 的 `MayCauseJavascriptExecution`）；情境的等待和 machopodriver 不用改。代價：每個請求多記一筆，回答時拿掉。不選全部失敗（W2：簡單，但情境的 runner 和 machopodriver 要在這個錯誤時重試，client 看到 Chrome 不會給的失敗；chromedriver 在大部分命令之前先等導覽結束）；不選全部重送（W3：給舊文件的 script 跑在新的文件上）。
 
 ## 待決定
 
-這份 RFC 層級的（第 1 到 12 條）定了。剩下的在各段開始時定：
-
-- **第 3 段**：定了（第 17 到 19 條）。
+沒有。
 
 ## 之後的可能
 
 - process lock 和 Browser 的檢查（路線圖的 B），直接建在這份上。
-- 開始時先猜、先啟動（Chromium 的 speculative `RenderFrameHost`），或備一個 spare renderer：其他平台量到啟動明顯比較慢時。
+- **在 macOS 和 Windows 量 renderer 啟動的時間**（第 5 條的「要做的」，這份沒做到：只有這台 Linux 的約 11 ms）；明顯比較慢時，開始時先猜、先啟動（Chromium 的 speculative `RenderFrameHost`），或備一個 spare renderer（第 9 條）。
 - 對話框的 RFC：`alert`、`confirm`、`prompt` 和 `beforeunload`（已決定的事項第 8 條），排在路線圖的 C、B 之後。
 - `sendBeacon` 和有作用的 `keepalive`：頁面結束之後 Browser 繼續完成它離開時送出的請求（Chromium 讓 process 多留最多 30 秒，`kKeepAliveHandleFactoryTimeout`）。
 - back-forward cache：舊的 renderer 不收掉、留著給上一頁。

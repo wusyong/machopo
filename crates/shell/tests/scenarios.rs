@@ -267,6 +267,12 @@ fn run_in_window(scenario: &scenario::Scenario, path: &Path, out: &Path) -> Resu
     command
         .arg("--remote-debugging-pipe")
         .arg(format!("--scale={}", scenario.window.scale.unwrap_or(1.0)))
+        // `navigate-site`'s names, as the windowless runner's browser has
+        // them.
+        .arg(format!(
+            "--host-resolver-rules={}",
+            automation::SITE_HOST_RULES
+        ))
         // Each tab's renderer in machopo's own process, when the run asks
         // (`test.py scenarios --window --single-process`); by default it
         // is a process of its own.

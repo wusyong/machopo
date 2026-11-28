@@ -1,0 +1,114 @@
+# Stage 4's mutants (a scenario's pages at two sites, and input that takes the tab to another site handled): `python3 scripts/test.py mutate rfcs/0124-cross-site-process-swap/mutants-4.toml`.
+test = ["sh", "-c", "MACHOPO_SLOW_TESTS=1 cargo test -q -p shell --test scenarios -- sites"]
+timeout = 1200
+
+[[mutant]]
+name = "input that went to a renderer replaced is never handled"
+file = "crates/shell/src/automation_session.rs"
+from = '''                if contents.input_in_flight() == 0 {
+                    let (done, waiting) = std::mem::take(&mut self.input_handled)'''
+to = '''                if false {
+                    let (done, waiting) = std::mem::take(&mut self.input_handled)'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::input_that_takes"]
+
+[[mutant]]
+name = "any host name is a site's"
+file = "crates/shell/src/scenario.rs"
+from = '''            if !is_test_host(host) {'''
+to = '''            if false {'''
+test = ["sh", "-c", "cargo test -q -p shell --lib scenario::"]
+
+[[mutant]]
+name = "a host name's labels aren't looked at"
+file = "crates/shell/src/scenario.rs"
+from = '''        !name.is_empty()
+            && name.split('.').all(|label| {'''
+to = '''        !name.is_empty()
+            || name.split('.').all(|label| {'''
+test = ["sh", "-c", "cargo test -q -p shell --lib scenario::"]
+
+[[mutant]]
+name = "the page is served at the server's address whatever the host"
+file = "crates/shell/src/automation.rs"
+from = '''                let url = server.url_for_host(host, &format!("/{name}"));'''
+to = '''                let url = server.url(&format!("/{name}"));'''
+
+[[mutant]]
+name = "the windowless browser has no host mapping"
+file = "crates/shell/src/windowless.rs"
+from = '''            host_resolver_rules: browser::HostMappingRules::parse(
+                crate::automation::SITE_HOST_RULES,
+            )
+            .expect("the scenarios' host mapping parses"),
+            ..Default::default()'''
+to = '''            ..Default::default()'''
+
+[[mutant]]
+name = "each navigate-site has a server of its own"
+file = "crates/shell/src/automation.rs"
+from = '''                    Some((server, served)) if *served == dir => server,'''
+to = '''                    Some((server, served)) if *served == dir && false => server,'''
+
+[[mutant]]
+name = "nothing on its way is sent to the new renderer"
+file = "crates/shell/src/automation_session.rs"
+from = '''                self.resend_to_renderer(contents);'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "a WebDriver command that changes the page goes to the new renderer"
+file = "crates/shell/src/automation_session.rs"
+from = '''        WebDriverCommand::ExecuteScript { .. }
+            | WebDriverCommand::ElementSendKeys { .. }'''
+to = '''        WebDriverCommand::ElementSendKeys { .. }'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "a query isn't sent again"
+file = "crates/shell/src/automation_session.rs"
+from = '''                } => contents.query_element(*id, frames, selector),'''
+to = '''                } => {}'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "a visual state isn't asked for again"
+file = "crates/shell/src/automation_session.rs"
+from = '''                RendererRequest::VisualState(id) => contents.request_visual_state(*id),'''
+to = '''                RendererRequest::VisualState(_) => {}'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "a scroll isn't sent again"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    contents.scroll_into_view_if_needed(frames, selector);
+                    contents.request_visual_state(*id);'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "a WebDriver command that asks about the page isn't sent again"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    contents.webdriver(*id, frame.clone(), command.clone());
+                }
+            }
+        }'''
+to = '''                }
+            }
+        }'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "what is sent again is taken as still the renderer's before"
+file = "crates/shell/src/automation_session.rs"
+from = '''            sent.renderer = renderer;
+            match &sent.request {'''
+to = '''            match &sent.request {'''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::requests_on_their_way"]
+
+[[mutant]]
+name = "a query answered stays to be sent again"
+file = "crates/shell/src/automation_session.rs"
+from = '''                self.answered(Answer::Query, *query_id);'''
+to = ''''''
+test = ["sh", "-c", "cargo test -q -p shell --test it -- automation_pipe::"]

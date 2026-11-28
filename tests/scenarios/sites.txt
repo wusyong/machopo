@@ -1,0 +1,34 @@
+# Links to another site: a.test and b.test (`navigate-site`) are two sites,
+# so each page commits in a renderer of its own, as the link, back and
+# forward cross; what the tab keeps for a site stays. The toolbar's back
+# and forward buttons are at (20, 54) and (52, 54), as in navigation.txt.
+navigate-site a.test pages/sites.html
+wait-loaded
+wait-text #where "a.test"
+click #remember
+wait-text #remembered "a.test"
+screenshot a
+# The link goes to the other site; input goes to its renderer.
+click #to-other
+wait-text #where "b.test"
+wait-text #remembered "nothing"
+click #count-me
+wait-text #count "1"
+screenshot b
+# Back, to the site before: a new renderer again, and its sessionStorage is
+# the tab's, kept in the browser.
+wait-loaded
+click-at 20 54
+wait-text #where "a.test"
+wait-text #remembered "a.test"
+click #count-me
+wait-text #count "1"
+# Forward; then the address field to the site before, at the same
+# server: the same origin, whose sessionStorage the tab has.
+wait-loaded
+click-at 52 54
+wait-text #where "b.test"
+wait-text #count "0"
+navigate-site a.test pages/sites.html
+wait-text #where "a.test"
+wait-text #remembered "a.test"

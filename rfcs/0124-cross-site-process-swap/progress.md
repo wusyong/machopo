@@ -1,22 +1,22 @@
 # RFC 0124 的進度：跨網站的導覽換 renderer
 
-開始日期：2026-11-27。
+開始日期：2026-11-27。完成日期：2026-11-28（Linux：Fedora 45，x86-64，AMD Radeon 890M）。
 
 ## 步驟
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 0. 草稿、盤點（`details.md` 的「盤點」「Chromium」）、量 renderer 啟動的時間、已決定的事項第 1 到 12 條 | 做完 | 2026-11-27 |
-| 1. 鋪路：commit 時才定送給哪個 renderer（`CommitParams`、`RenderProcessHost::commit_navigation`）；renderer 在導覽途中不在了照已決定的事項第 13 條（`WebContents::renderer_gone`）；自動化照分頁的 renderer 重新接上 DevTools 的 session（`WebContents::renderer_id`），繼續的導覽的 `Page.navigate`、`Machopo.waitForLoad` 繼續等 | 做完，待審核 | 2026-11-27 |
-| 2a. 已決定的事項第 14 到 16 條；`DevToolsSessionState`（`RendererHostMsg::DevToolsSessionState`、`DevToolsAttach` 帶著它）；六個 agent 各自的 `state`、`restore`，renderer 在命令改了狀態時告訴 Browser；`WebContents` 記著它的 session 和狀態、換 renderer 時在 commit 之前接上（自動化不再自己重新接上、重送 `Page.enable`）；還沒回答的命令記著送給了哪個 renderer，當掉時以 `Target crashed` 失敗、換了時照第 15 條（換的那一半要第 3 段才測得到），renderer 不在時送來的立刻以 `Target crashed` 回答 | 做完，待審核 | 2026-11-28 |
-| 2b. V8 的狀態（rusty_v8 的 fork 接出 `V8InspectorSession::state()`，fork 的測試 `inspector_session_state_round_trip`）、依網址的斷點（`bindings` 記下、重送，回答不給 client）、script 暫停或被打斷時 V8 處理完的命令也回報、新的 engine（下一個 renderer 的、另一種的）照最後回報的接上 | 做完，待審核 | 2026-11-28 |
-| 3a. 已決定的事項第 17 到 19 條；`SiteInfo` 和 `site_info::swaps`；跨網站的 main frame 的 commit 在新的 renderer（`WebContents::swap_renderer`，和 `relaunch` 共用 `replace_renderer`）；舊的 renderer 收到 `RendererMsg::Unload`、跑 `pagehide` 和 `unload`，最多等 500 ms（`RenderProcessHost::unload`，thread 的打斷 script）；`headless` 換畫新的 sink、視窗清掉舊 renderer 的游標、capture 和選單；自動化的 `forward_to_renderer` 有了測試 | 做完，待審核 | 2026-11-28 |
-| 3b. renderer 告訴 Browser 頁面被使用者操作過（`RendererHostMsg::DidReceiveUserActivation`）；換 process 時的 fallback（第 18 條：`Material::Surface` 的 `fallback`、Viz 告訴 Browser 新 sink 的第一個 frame，`ContentsEvent::FirstFrame`）；Browser 判斷能不能留（`WebContents::allows_paint_holding`）、同一個 renderer 時放進 `CommitNavigation` 的 `paint_holding`（第 19 條） | 做完，待審核 | 2026-11-28 |
-| 4. 收尾：量測工具、WPT、`--window` 的情境、文件、整個 workspace 的測試 | 還沒開始 | |
+| 1. 鋪路：commit 時才定送給哪個 renderer（`CommitParams`、`RenderProcessHost::commit_navigation`）；renderer 在導覽途中不在了照已決定的事項第 13 條（`WebContents::renderer_gone`）；自動化照分頁的 renderer 重新接上 DevTools 的 session（`WebContents::renderer_id`），繼續的導覽的 `Page.navigate`、`Machopo.waitForLoad` 繼續等 | 做完 | 2026-11-27 |
+| 2a. 已決定的事項第 14 到 16 條；`DevToolsSessionState`（`RendererHostMsg::DevToolsSessionState`、`DevToolsAttach` 帶著它）；六個 agent 各自的 `state`、`restore`，renderer 在命令改了狀態時告訴 Browser；`WebContents` 記著它的 session 和狀態、換 renderer 時在 commit 之前接上（自動化不再自己重新接上、重送 `Page.enable`）；還沒回答的命令記著送給了哪個 renderer，當掉時以 `Target crashed` 失敗、換了時照第 15 條（換的那一半要第 3 段才測得到），renderer 不在時送來的立刻以 `Target crashed` 回答 | 做完 | 2026-11-28 |
+| 2b. V8 的狀態（rusty_v8 的 fork 接出 `V8InspectorSession::state()`，fork 的測試 `inspector_session_state_round_trip`）、依網址的斷點（`bindings` 記下、重送，回答不給 client）、script 暫停或被打斷時 V8 處理完的命令也回報、新的 engine（下一個 renderer 的、另一種的）照最後回報的接上 | 做完 | 2026-11-28 |
+| 3a. 已決定的事項第 17 到 19 條；`SiteInfo` 和 `site_info::swaps`；跨網站的 main frame 的 commit 在新的 renderer（`WebContents::swap_renderer`，和 `relaunch` 共用 `replace_renderer`）；舊的 renderer 收到 `RendererMsg::Unload`、跑 `pagehide` 和 `unload`，最多等 500 ms（`RenderProcessHost::unload`，thread 的打斷 script）；`headless` 換畫新的 sink、視窗清掉舊 renderer 的游標、capture 和選單；自動化的 `forward_to_renderer` 有了測試 | 做完 | 2026-11-28 |
+| 3b. renderer 告訴 Browser 頁面被使用者操作過（`RendererHostMsg::DidReceiveUserActivation`）；換 process 時的 fallback（第 18 條：`Material::Surface` 的 `fallback`、Viz 告訴 Browser 新 sink 的第一個 frame，`ContentsEvent::FirstFrame`）；Browser 判斷能不能留（`WebContents::allows_paint_holding`）、同一個 renderer 時放進 `CommitNavigation` 的 `paint_holding`（第 19 條） | 做完 | 2026-11-28 |
+| 4. 收尾：已決定的事項第 20、21 條（情境的 `navigate-site`；自動化還在等舊 renderer 的請求照第 21 條重送或失敗）；換過去的 input 的 `Machopo.waitForInputHandled`；storage 跨過換 renderer 的測試；`unloading-documents/` 的 WPT；量測工具；RFC 和文件改寫成完成時的樣子 | 做完 | 2026-11-28 |
 
 第 1 段開始之前先做 RFC 0125（網址列的偽造，2026-11-27 使用者決定）。
 
-在別的機器上要做的：macOS 和 Windows 上量 renderer process 啟動的時間（已決定的事項第 5 條），明顯比這台 Linux 的 11 ms 慢時重新考慮提前啟動和預備的 renderer。
+還沒做、要在別的機器上做的：macOS 和 Windows 上量 renderer process 啟動的時間（已決定的事項第 5 條），明顯比這台 Linux 的 11 ms 慢時重新考慮提前啟動和預備的 renderer（`README.md` 的「之後的可能」）。
 
 ## 驗收
 
@@ -28,8 +28,23 @@
 | 已經送出 commit 的跟著 renderer 丟掉，網址列回到目前的頁面 | `renderer_gone::a_navigation_sent_to_commit_goes_with_the_renderer` |
 | 自動化：載入途中 renderer 被結束，`Page.navigate` 在新的 renderer commit 時回答，session 接到新的 renderer 上、命令照常 | `cargo test -p shell --test it automation_pipe::a_navigation_on_its_way_as_the_renderer_goes_commits_in_a_new_one` |
 | 等著的東西在 renderer 不在了時失敗，繼續的導覽的 load 除外 | `windowless::a_renderer_gone_fails_what_waits_for_it` |
-
-其餘的段做到時補上。
+| **規則**：每一種網址（網頁、`file:`、內建頁、`about:blank`、opaque、`blob:`）、重新整理、上一頁 | `cargo test -p browser --lib site_info` |
+| 跨網站的導覽在新的 renderer commit，同一個 site 裡留著；回到之前的網站又是新的 | `cargo test -p browser --test it process_swap::a_navigation_to_another_site_commits_in_a_new_renderer`、`process_swap::going_back_to_the_site_before_commits_in_a_new_renderer` |
+| 重新整理、`about:blank` 留著；每個 `data:` 一個 site；內建頁一個 site；錯誤頁照它的網址 | `process_swap::a_reload_and_about_blank_stay`、`every_data_url_is_a_site_of_its_own`、`a_page_of_the_browsers_own_is_a_site_of_its_own`、`an_error_page_goes_by_its_urls_site` |
+| **換**：舊文件的子 frame 跟著舊的 renderer 走；還沒 ack 的 input 不再算 | `process_swap::the_frames_of_the_document_before_go_with_its_renderer`、`navigation::links::input_the_renderer_before_had_isnt_in_flight` |
+| 舊文件的 `pagehide`、`unload` 有跑（寫的 `localStorage` 回到那個網站時讀得到），process 和 thread 兩種；在 debugger 裡暫停的也跑；`unload` 不結束的 process 500 ms 之後被結束 | `cargo test -p shell --test it automation_pipe::a_documents_unload_runs_as_another_site_takes_its_place`、`a_renderer_paused_in_the_debugger_unloads_as_another_site_takes_its_place`、`a_renderer_whose_unload_doesnt_end_is_ended` |
+| `sessionStorage`、`localStorage` 跨過換 renderer 留著 | `cargo test -p browser --test it dom_storage::a_tabs_storage_stays_as_another_sites_renderer_takes_its_place` |
+| 視窗清掉舊 renderer 的游標、capture 和選單；`headless` 的輸出跟著換 sink | `browser_view::another_sites_renderer_has_none_of_the_ui_the_one_before_had`、`script::the_output_follows_the_tab_to_another_sites_renderer` |
+| **畫面**：舊頁面被操作過時，舊的 sink 留到新的畫出來（Browser 的狀態、畫出來的像素），沒有時不留；新的 renderer 不在了時不留 | `process_swap::the_sink_before_stands_in_till_the_new_one_draws_if_the_user_acted`、`browser_view::the_page_before_shows_till_another_sites_renderer_draws_if_the_user_acted_on_it` |
+| 同一個 renderer 裡：分頁的第一份文件、被操作過、同一個 origin 時留著舊的畫面，其餘的當場空白 | `navigation::links::a_page_of_another_origin_shows_at_once_unless_the_user_acted_on_the_one_before` |
+| Viz 畫 fallback、告訴 client 它的第一個 frame 一次 | `cargo test -p viz --lib surface_aggregator::a_surface_shows_its_fallback_till_it_has_a_frame`、`thread::a_client_is_told_its_first_frame_once` |
+| **DevTools**：命令改了狀態才回報；新的 renderer 不用再開就照狀態（六個 agent）；太大的狀態是壞訊息 | `cargo test -p browser --test it devtools_session::` |
+| V8 的狀態、依網址的斷點、暫停時設的斷點和 pause on exceptions 接到下一個 renderer | `cargo test -p dom_js devtools::a_session_goes_on_in_another_engine_from_its_state`、`cargo test -p shell --test it devtools::a_breakpoint_set_while_paused_goes_on_in_the_next_renderer`、`devtools::the_pause_on_exceptions_goes_on_in_the_next_renderer` |
+| 還沒回答的命令：當掉時 `Target crashed`；換了時會跑 script 的失敗、其餘的在新的 renderer 回答 | `devtools::a_session_outlives_its_renderer`、`automation_pipe::commands_on_their_way_as_another_sites_renderer_takes_the_tabs_place` |
+| 讓分頁到別的網站的 input 照樣算處理完（`Machopo.waitForInputHandled`） | `automation_pipe::input_that_takes_the_tab_to_another_site_is_handled` |
+| 自動化還在等舊 renderer 回答的請求：會改頁面的 WebDriver 方法失敗，查詢、visual state、捲動、只讀的 WebDriver 方法在新的 renderer 回答 | `automation_pipe::requests_on_their_way_as_another_sites_renderer_takes_the_tabs_place` |
+| **情境**：點連結到別的網站、上一頁、下一頁、新的 renderer 收得到 input、`sessionStorage` 留著 | `python3 scripts/test.py scenarios sites`（`--window` 也跑） |
+| WPT：導覽、history、unload 的目錄經過 machopodriver 跑真的 process | `python3 scripts/test.py wpt html/browsers/`（只跑清單裡的） |
 
 ## 做過的檢查
 
@@ -68,7 +83,7 @@
 - **mutation test**（`mutants-2b.toml`，12 個）：全部抓到。第一次跑漏掉 3 個「回報狀態」的路：每次回報算的都是 V8 當下完整的狀態，原本的端到端測試用 `Runtime.evaluate` 讓 script 暫停，暫停結束後它從一般的路回來又回報一次，蓋掉了暫停那條路的缺漏（反過來也是）。改成兩個各自只走一條路的測試之後都抓到。script 跑著時打斷它的命令那條路沒有測試，記進 `docs/test-gaps.md`。
 - 改到的 crate 的測試（`bindings`、`dom_api`、`dom_js`、`dom_wasm`、`renderer`、`browser`、`driver`、`shell`）：2,230 個通過，0 個失敗。
 - **段落結束的檢查**（連結本機編的 V8）：`cargo test --workspace` 5,057 個通過（1 個 ignored）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`（抓到 `bindings` 的一個沒寫明溢位的負號、`shell` 的一個可以合併的 `if`，改了；改了寫法的 mutant 重跑，抓到）、`sanity.py` 的每一項都通過；`test.py wpt html/browsers/history/the-location-interface/`（改了 `automation_session`）0 個非預期的結果；量測工具的測試：`blink_perf`、`raster`、`census` 通過，`speedometer_test.py` 的 `test_the_windows_are_the_runners_times` 失敗一次，是 RFC 0125 的 `progress.md` 記過、`main` 上也會的那個（不追）。
-- **merge 之前**：第 2b 段改了 fork 的 C++，現在的 prebuilt V8（`machopo-v152.2.0-30`）沒有 `state()`：CI 和其他機器連結 prebuilt，merge 之前要發 fork 的新 release、把 `RUSTY_V8_MIRROR_TAG` 和 `third_party.toml` 移過去（fork 的 `README.machopo.md` 的「Releases」）。
+- 第 2b 段改了 fork 的 C++，那時的 prebuilt V8（`machopo-v152.2.0-30`）沒有 `state()`，release 之前連結本機編的。
 - **fork 的 release**（2026-11-28）：fork 的 `bfa542c` 推到 `machopo`、打了 `machopo-v152.2.0-31` 的 tag，`machopo-release` 的 workflow 六個 job 都通過（約 2 小時，macOS 的 debug 最久）。`RUSTY_V8_MIRROR_TAG` 移到它、`third_party.toml` 拿掉 rusty_v8 的 `rev`；不設 `RUSTY_V8_ARCHIVE`、從 release 下載 prebuilt 的 V8（build script 的輸出確認是 GitHub 上那個 tag 的）跑 `bindings`、`dom_js`、`browser`、`shell` 的測試，1,808 個通過。
 
 ### 第 3 段開始時（2026-11-28）
@@ -91,3 +106,13 @@
 - 改到的 crate 的測試（`protocol`、`compositor`、`viz`、`renderer`、`browser`、`shell`）都通過。
 - **第 3 段結束的檢查**（連結本機編的 V8）：`cargo test --workspace` 5,084 個通過（1 個 ignored）；`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo fmt --check` 有幾處排版，`cargo fmt` 改了；`sanity.py boundary` 抓到 `protocol` 的 `BeginFrameObserver::with_first_frame` 和它的欄位（closure 不能跨 process），和同一個 observer 的 `BeginFrame`、像素回來的 closure 一樣是 Browser 和 Viz 之間的（Viz 留在 Browser 的 process），加進 `PROTOCOL_ALLOWED`；之後 `sanity.py` 的每一項都通過。量測工具的測試（改了 renderer 怎麼啟動和結束）：`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py` 都通過。
 
+
+### 第 4 段（2026-11-28，Linux：Fedora 45，x86-64，AMD Radeon 890M）
+
+- **量測工具**：四個工具都從 `about:blank` 出發、只導覽到一個 site（`file:`，或 `127.0.0.1` 的同一個 port），不會換 renderer；第 3 段結束時它們的測試都通過，不用改。
+- **WPT**：`html/browsers/browsing-the-web/unloading-documents/` 整個跑一次（`--all`），30 個檔案裡 12 個整個通過，一個一個加進 `include.txt`；其餘的要 `window.open`（main frame 的那幾個經過 RemoteContextHelper）、`beforeunload` 的對話框和取消、`window.close()`。加進去的跑了 3 次，都是 0 個非預期的結果。
+- **新的測試**：`shell` 的 `scenario::a_page_navigated_to_at_a_site` 和 `errors_name_the_line` 的十一種錯的 `navigate-site`；情境 `sites.txt`（`pages/sites.html`）；`automation_pipe::input_that_takes_the_tab_to_another_site_is_handled`、`requests_on_their_way_as_another_sites_renderer_takes_the_tabs_place`；`browser` 的 `dom_storage::a_tabs_storage_stays_as_another_sites_renderer_takes_its_place`。
+- **找到的 bug**：（1）寫 `sites.txt` 時，點了到別的網站的連結之後 runner 等「input 處理完」一直等不到：換 renderer 時 `input_in_flight` 歸零，但等著的 `Machopo.waitForInputHandled` 只在收到 ack 時回答，被換掉的 renderer 不會再送 ack；改成分頁的 `input_in_flight` 是 0 時就回答。（2）`--window` 跑全部的情境，75 個裡只有 `sites` 失敗（最後一步從 `b.test` 在網址列輸入 `a.test` 之後問 `#where`，10 秒沒有回答）：自動化自己的請求只照分頁記著，送給正在被換掉的 renderer 的查詢沒人處理；照第 21 條改了之後，`--window` 的 `sites` 連跑 13 次都通過。沒有平台視窗時（thread 的 renderer）沒碰到，推測是真的 process 換得比較慢、查詢比較常落在那一刻。
+- **mutation test**（`mutants-4.toml`，14 個）：12 個抓到。第一次跑時情境的測試指令沒設 `MACHOPO_SLOW_TESTS`，`cargo test` 跳過情境、baseline 空跑，漏了「網址照 server 的位址、不看主機」；補上之後抓到。漏的 2 個（重送的請求記成新的 renderer 的、回答了的從清單拿掉）只造成重複的請求，結果一樣，記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」。
+- **情境**：沒有平台視窗的全部（99 個）通過；`--window` 的全部（75 個）在修好第 21 條之前只有 `sites` 失敗，修好之後 `sites` 和 `navigation` 連跑 3 次、`sites` 再連跑 10 次都通過。
+- **第 4 段結束的檢查**（連結 prebuilt 的 V8，`machopo-v152.2.0-31`）：`cargo test --workspace` 5,088 個通過（1 個 ignored）；`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo fmt --check` 有幾處排版，`cargo fmt` 改了（`mutants-4.toml` 的每一個 `from` 照樣找得到）；`sanity.py` 的每一項都通過。量測工具的測試（改了 automation pipe 的 CDP 方法）：`speedometer_test.py`、`blink_perf_test.py`、`raster_test.py`、`census_test.py` 都通過。`test.py wpt html/browsers/history/the-location-interface/ html/browsers/browsing-the-web/navigating-across-documents/ html/browsers/browsing-the-web/unloading-documents/`（改了 `automation_session`）0 個非預期的結果。

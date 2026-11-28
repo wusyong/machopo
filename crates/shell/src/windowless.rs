@@ -139,6 +139,14 @@ fn browser_options(window: &scenario::WindowSettings) -> browser_window::Options
         test_fonts: true,
         automation: true,
         caret_blink_interval: window.caret_blink,
+        // `navigate-site`'s names, as `--window`'s machopo has them.
+        network: browser::NetworkContextParams {
+            host_resolver_rules: browser::HostMappingRules::parse(
+                crate::automation::SITE_HOST_RULES,
+            )
+            .expect("the scenarios' host mapping parses"),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

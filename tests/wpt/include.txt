@@ -902,6 +902,23 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/
 html/browsers/browsing-the-web/navigating-across-documents/
 html/browsers/windows/nested-browsing-contexts/
 
+# Unloading documents: the files of `unloading-documents/` that pass
+# whole. The rest wait for `window.open` (the main frame's, through
+# RemoteContextHelper), `beforeunload`'s prompt and its canceling, and
+# `window.close()`.
+html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-iframe.html
+html/browsers/browsing-the-web/unloading-documents/pagehide-on-history-forward.html
+html/browsers/browsing-the-web/unloading-documents/prompt-and-unload-script-uncloseable.html
+html/browsers/browsing-the-web/unloading-documents/prompt/002.html
+html/browsers/browsing-the-web/unloading-documents/prompt/003.html
+html/browsers/browsing-the-web/unloading-documents/unload/001.html
+html/browsers/browsing-the-web/unloading-documents/unload/002.html
+html/browsers/browsing-the-web/unloading-documents/unload/004.html
+html/browsers/browsing-the-web/unloading-documents/unload/006.html
+html/browsers/browsing-the-web/unloading-documents/unload/007.html
+html/browsers/browsing-the-web/unloading-documents/unload/008.html
+html/browsers/browsing-the-web/unloading-documents/unload/009.html
+
 # CSSOM View: the whole of `css/cssom-view/` rather than file by file, but
 # for what is `disabled`.
 css/cssom-view/

@@ -89,6 +89,12 @@ pub enum Command {
         at: usize,
         pause: Duration,
     },
+    /// `Navigate` to the file at `path` (relative to the scenario's), served
+    /// over HTTP at `host`, a name under `.test`, by a server of the
+    /// scenario's own: every `.test` name is the same server, which serves
+    /// the files of `path`'s directory, so a page links to another site by
+    /// another name and its own port.
+    NavigateSite { host: String, path: String },
     /// Until the latest navigation started has loaded.
     WaitLoaded,
     /// The primary button down and up.
@@ -261,6 +267,21 @@ fn parse_command(name: &str, rest: &str) -> Result<Vec<Command>, String> {
                 path: path.to_owned(),
                 at: usize::try_from(whole(at)?).map_err(|_| format!("{at} bytes is too many"))?,
                 pause: Duration::from_millis(whole(ms)?),
+            }
+        }
+        "navigate-site" => {
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            let [host, path] = words[..] else {
+                return Err("needs a host name and a path".into());
+            };
+            if !is_test_host(host) {
+                return Err(format!(
+                    "{host:?} isn't a host name under .test (`a.test`, `www.b.test`...)"
+                ));
+            }
+            Command::NavigateSite {
+                host: host.to_owned(),
+                path: path.to_owned(),
             }
         }
         "wait-loaded" => {
@@ -445,6 +466,23 @@ fn name_argument(rest: &str) -> Result<String, String> {
             "{rest:?} isn't a name: letters, digits, `-`, `_` and `.` only"
         ))
     }
+}
+
+/// Whether `host` is a name under `.test` (the top-level domain kept for
+/// testing, which no real host has): lowercase labels of letters, digits
+/// and `-`, at least one before `test`.
+fn is_test_host(host: &str) -> bool {
+    host.strip_suffix(".test").is_some_and(|name| {
+        !name.is_empty()
+            && name.split('.').all(|label| {
+                !label.is_empty()
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            })
+    })
 }
 
 fn numbers<const N: usize>(rest: &str) -> Result<[f32; N], String> {
@@ -749,6 +787,23 @@ mod tests {
     }
 
     #[test]
+    fn a_page_navigated_to_at_a_site() {
+        assert_eq!(
+            commands("navigate-site a.test pages/a.html\nnavigate-site www.b-2.test x.html"),
+            [
+                Command::NavigateSite {
+                    host: "a.test".into(),
+                    path: "pages/a.html".into(),
+                },
+                Command::NavigateSite {
+                    host: "www.b-2.test".into(),
+                    path: "x.html".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn steps_keep_their_lines() {
         let steps = parse("# comment\n\nnavigate about:demo\n  wait-loaded  \n")
             .unwrap()
@@ -1031,6 +1086,17 @@ mod tests {
             "navigate-paused a.html x 10",
             "navigate-paused a.html 10 -1",
             "navigate-paused a.html 10 1.5",
+            "navigate-site",
+            "navigate-site a.test",
+            "navigate-site a.test a.html b.html",
+            "navigate-site a.example a.html",
+            "navigate-site test a.html",
+            "navigate-site .test a.html",
+            "navigate-site a..test a.html",
+            "navigate-site A.test a.html",
+            "navigate-site -a.test a.html",
+            "navigate-site a_b.test a.html",
+            "navigate-site a.test:80 a.html",
             "wait-loaded now",
             "click",
             "click-at 1",

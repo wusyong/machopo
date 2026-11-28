@@ -710,6 +710,47 @@ onload = () => {
     web_contents.shutdown();
 }
 
+/// A tab's storage is the browser's, not its renderer's: as the tab goes
+/// to another site and back, each time in a new renderer, the site's
+/// `sessionStorage` and `localStorage` are as it left them.
+#[test]
+fn a_tabs_storage_stays_as_another_sites_renderer_takes_its_place() {
+    let server = server(&[
+        (
+            "/write",
+            Route::ok(
+                "text/html",
+                "<script>sessionStorage.mine = 'yes'; localStorage.ours = 'yes'; document.title = 'written'</script>",
+            ),
+        ),
+        (
+            "/read",
+            Route::ok(
+                "text/html",
+                "<script>document.title = `read ${sessionStorage.mine} ${localStorage.ours}`</script>",
+            ),
+        ),
+    ]);
+    let (mut tab, tab_rx) = tab_in(partition(&Profile::in_memory()));
+    tab.navigate(server.url("/write"));
+    titles_until(&mut tab, &tab_rx, |title| title == "written");
+    let writer = tab.renderer_id();
+    tab.navigate(server.url_for_host("localhost", "/read"));
+    assert_eq!(
+        titles_until(&mut tab, &tab_rx, |title| title.starts_with("read")),
+        "read undefined undefined"
+    );
+    let other = tab.renderer_id();
+    assert_ne!(other, writer, "another site's renderer");
+    tab.navigate(server.url("/read"));
+    assert_eq!(
+        titles_until(&mut tab, &tab_rx, |title| title.starts_with("read")),
+        "read yes yes"
+    );
+    assert!(tab.renderer_id() != other && tab.renderer_id() != writer);
+    tab.shutdown();
+}
+
 /// A tab's `sessionStorage` is its own: its next page of the origin has
 /// it, another tab of the profile doesn't (one opened after the change
 /// too), and a change in it fires no `storage` in another tab.

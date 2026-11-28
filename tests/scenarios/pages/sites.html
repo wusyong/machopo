@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- sites.txt's page, at a.test and at b.test (navigate-site): a link to
+     the other site, a counter, and what this site's sessionStorage has. -->
+<title>sites</title>
+<style>
+  html, body { margin: 0 }
+  a, span { display: block; height: 40px }
+</style>
+<p id="where"></p>
+<a id="to-other">to the other site</a>
+<span id="remember" onclick="remember()">remember</span>
+<p id="remembered"></p>
+<span id="count-me" onclick="more()">count</span>
+<p id="count">0</p>
+<script>
+  const here = location.hostname;
+  const other = here === "a.test" ? "b.test" : "a.test";
+  document.getElementById("where").textContent = here;
+  document.getElementById("to-other").href =
+    `http://${other}:${location.port}${location.pathname}`;
+  function show() {
+    document.getElementById("remembered").textContent =
+      sessionStorage.getItem("here") ?? "nothing";
+  }
+  function remember() {
+    sessionStorage.setItem("here", here);
+    show();
+  }
+  show();
+  let clicks = 0;
+  function more() {
+    document.getElementById("count").textContent = String(++clicks);
+  }
+</script>

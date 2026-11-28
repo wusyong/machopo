@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, PipeReader, PipeWriter, Read, Write};
 use std::process::{Child, Command as Process, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use crossbeam_channel::{Receiver, unbounded};
@@ -383,12 +383,12 @@ pub(crate) fn start_machopo(command: &mut Process) -> (Child, PipeWriter, PipeRe
 }
 
 fn wait(child: &mut Child) -> std::process::ExitStatus {
-    let deadline = std::time::Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + TIMEOUT;
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
         }
-        assert!(std::time::Instant::now() < deadline, "machopo didn't end");
+        assert!(Instant::now() < deadline, "machopo didn't end");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -625,6 +625,87 @@ fn commands_on_their_way_as_another_sites_renderer_takes_the_tabs_place() {
     assert!(browser.end().success());
 }
 
+/// The automation's own requests on their way to the tab's renderer as a
+/// renderer of another site takes its place, as DevTools' commands: a
+/// WebDriver command that may change the page fails, the document it was
+/// for being no more; the others go to the new renderer, and are answered
+/// there, of its document.
+#[test]
+fn requests_on_their_way_as_another_sites_renderer_takes_the_tabs_place() {
+    let server = server(&[
+        (
+            "/",
+            Route::ok("text/html", "<!DOCTYPE html><p id=where>a</p>"),
+        ),
+        (
+            "/b",
+            Route::ok("text/html", "<!DOCTYPE html><p id=where>b</p>"),
+        ),
+    ]);
+    let mut browser = Browser::start();
+    let session = browser.attach();
+    browser.navigate(&session, &server.url("/"));
+    script(
+        &mut browser,
+        &session,
+        "setTimeout(() => { const end = Date.now() + 3000; while (Date.now() < end); }, 0)",
+        json!([]),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let query = browser.send(
+        None,
+        "Machopo.queryElement",
+        json!({ "selector": "#where" }),
+    );
+    let scroll = browser.send(
+        None,
+        "Machopo.scrollIntoViewIfNeeded",
+        json!({ "selector": "#where" }),
+    );
+    let capture = browser.send(None, "Machopo.captureWindow", json!({}));
+    let find = browser.send(
+        Some(&session),
+        "Machopo.findElements",
+        json!({ "using": "css selector", "value": "#where" }),
+    );
+    let runs = browser.send(
+        Some(&session),
+        "Machopo.executeScript",
+        json!({ "script": "return 1", "args": [] }),
+    );
+    let navigate = browser.send(
+        Some(&session),
+        "Page.navigate",
+        json!({ "url": other_site(&server, "/b") }),
+    );
+    let answers = answers(
+        &mut browser,
+        &[query, scroll, capture, find, runs, navigate],
+    );
+    let error = answers[&runs].clone().unwrap_err();
+    assert_eq!(error.code, SERVER_ERROR);
+    assert_eq!(error.message, "Inspected target navigated or closed");
+    let found = answers[&query].clone().unwrap();
+    assert_eq!(found["element"]["text"], "b", "{found}");
+    assert!(answers[&scroll].is_ok(), "{answers:?}");
+    assert!(answers[&capture].clone().unwrap()["data"].is_string());
+    let elements = answers[&find].clone().unwrap();
+    assert_eq!(
+        elements["value"].as_array().map(Vec::len),
+        Some(1),
+        "{elements}"
+    );
+    let text = webdriver(
+        &mut browser,
+        &session,
+        "Machopo.getElementProperty",
+        json!({ "element": element_id(&elements["value"][0]), "name": "textContent" }),
+    );
+    assert_eq!(text, Ok(json!("b")));
+    assert!(browser.end().success());
+}
+
 /// The document a renderer of another site takes the place of is unloaded
 /// in its own renderer, its `pagehide` and `unload` run: what they write
 /// to `localStorage` is there when the tab is back at its site. With the
@@ -727,7 +808,7 @@ fn a_renderer_whose_unload_doesnt_end_is_ended() {
             .unwrap()
             .success()
     };
-    let asked = std::time::Instant::now();
+    let asked = Instant::now();
     while alive() {
         assert!(
             asked.elapsed() < Duration::from_secs(10),
@@ -736,6 +817,48 @@ fn a_renderer_whose_unload_doesnt_end_is_ended() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(browser.end().success());
+}
+
+/// Input given a page whose link goes to another site is handled once the
+/// renderer of that site has the tab: no ack comes from the one it went
+/// to, which has been replaced.
+#[test]
+fn input_that_takes_the_tab_to_another_site_is_handled() {
+    let server = server(&[
+        ("/", Route::ok("text/html", "")),
+        (
+            "/b",
+            Route::ok("text/html", "<!DOCTYPE html><p id=where>b</p>"),
+        ),
+    ]);
+    let mut browser = Browser::start();
+    let page = format!(
+        "<!DOCTYPE html><style>a {{ display: block; height: 100px }}</style>\
+         <a id=b href='{}'>b</a>",
+        other_site(&server, "/b")
+    );
+    let url = format!("data:text/html,{}", page.replace('#', "%23"));
+    browser
+        .call(
+            None,
+            "Machopo.navigateFromAddressBar",
+            json!({ "url": url }),
+        )
+        .unwrap();
+    browser
+        .call(None, "Machopo.waitForLoad", json!({}))
+        .unwrap();
+    browser.click("#b");
+    let deadline = Instant::now() + TIMEOUT;
+    while browser.query("#where")["element"]["text"] != "b" {
+        assert!(
+            Instant::now() < deadline,
+            "the other site's page never came"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The new renderer's input is handled as any.
+    browser.click("#where");
 }
 
 /// The session history: back to another document loads it; back to an
@@ -1096,7 +1219,7 @@ fn the_version_tells_a_browser_without_a_window() {
 fn the_system_info_tells_the_gpu_adapter() {
     let mut browser = Browser::start();
     // Known once Viz has made its renderer, just after machopo starts.
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let info = loop {
         let info = browser.call(None, "SystemInfo.getInfo", json!({})).unwrap();
         if !info["gpu"]["devices"].as_array().unwrap().is_empty() {
@@ -1127,7 +1250,7 @@ fn the_process_info_tells_the_browser_and_each_renderer() {
     browser
         .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
         .unwrap();
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let infos = loop {
         let info = browser
             .call(None, "SystemInfo.getProcessInfo", json!({}))
@@ -2025,7 +2148,7 @@ fn waiting_for_a_load_is_the_sessions_tabs() {
         json!({ "url": server.url("/slow") }),
     );
     std::thread::sleep(Duration::from_millis(50));
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     browser
         .call(Some(&first), "Machopo.waitForLoad", json!({}))
         .unwrap();
@@ -3314,7 +3437,7 @@ fn hung_renderers_take_the_limit_once() {
     assert_eq!(renderers.len(), 3, "{renderers:?}");
     let watched = Watched::new(&renderers);
     std::thread::sleep(Duration::from_millis(300));
-    let asked = std::time::Instant::now();
+    let asked = Instant::now();
     assert!(browser.end().success());
     let took = asked.elapsed();
     // The limit, once, and the time to start and end; one renderer after
@@ -3367,7 +3490,7 @@ fn a_single_processs_hung_renderers_have_their_script_stopped() {
         );
     }
     std::thread::sleep(Duration::from_millis(300));
-    let asked = std::time::Instant::now();
+    let asked = Instant::now();
     assert!(browser.end().success());
     let took = asked.elapsed();
     assert!(took < Duration::from_secs(4), "{took:?}");
@@ -3450,7 +3573,7 @@ fn a_second_signal_ends_machopo_at_once() {
     std::thread::sleep(Duration::from_millis(300));
     signal(&browser, "TERM");
     std::thread::sleep(Duration::from_millis(300));
-    let asked = std::time::Instant::now();
+    let asked = Instant::now();
     signal(&browser, "TERM");
     let status = wait(&mut browser.child);
     // Before the renderer's limit, two seconds after the first.
@@ -3546,7 +3669,7 @@ fn a_client_not_reading_doesnt_hold_machopo_up() {
         input.write_all(&[0]).unwrap();
     }
     drop(input);
-    let asked = std::time::Instant::now();
+    let asked = Instant::now();
     let status = wait(&mut child);
     let took = asked.elapsed();
     // The limit (2 s), and the time to read and answer 5000 commands
@@ -3708,12 +3831,9 @@ fn renderers_go_with_a_killed_browser(scripts: &[Option<&str>]) {
     std::thread::sleep(Duration::from_secs(1));
     browser.child.kill().unwrap();
     browser.child.wait().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while watched.any_alive() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "a renderer outlived its browser"
-        );
+        assert!(Instant::now() < deadline, "a renderer outlived its browser");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
