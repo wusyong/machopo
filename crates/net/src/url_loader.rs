@@ -291,6 +291,22 @@ pub(crate) async fn load(
         if let Some(cors) = &cors {
             cors.check(&url, &raw)?;
         }
+        // A renderer's `no-cors` request (one with an initiator: the
+        // browser's own have none), each hop's response.
+        if request.mode == protocol::network::RequestMode::NoCors
+            && let Some(initiator) = request.initiator.as_deref()
+            && crate::corp::blocks(
+                initiator,
+                &url,
+                &raw.headers,
+                crate::corp::EmbedderPolicy::default(),
+            )
+        {
+            return Err(NetError::new(
+                NetErrorCode::BlockedByResponse,
+                format!("{url}: its Cross-Origin-Resource-Policy isn't for {initiator}"),
+            ));
+        }
         if is_redirect_status(raw.status) {
             match request.redirect {
                 RedirectMode::Follow => {}

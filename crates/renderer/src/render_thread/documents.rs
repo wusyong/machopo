@@ -3958,8 +3958,11 @@ impl dom_api::LoadSink for RendererLoadSink {
         {
             return None;
         }
+        // From no document, no origin: the browser takes no request
+        // without one.
+        let request_origin = request_origin?;
         let mut request = ResourceRequest::new(url, RequestDestination::Image);
-        request.initiator = request_origin.map(String::from);
+        request.initiator = Some(request_origin.to_owned());
         let request_id = crate::loader::next_request_id();
         self.send(request_id, document, request, origin);
         Some(request_id)
@@ -3984,8 +3987,9 @@ impl dom_api::LoadSink for RendererLoadSink {
             self.scheduler.post_request_failed(request_id, &script.url);
             return Some(request_id);
         }
+        let request_origin = request_origin?;
         let mut request = ResourceRequest::new(&script.url, RequestDestination::Script);
-        request.initiator = request_origin.map(String::from);
+        request.initiator = Some(request_origin.to_owned());
         // A module's (and a `crossorigin` one's) by CORS, its credentials
         // mode the module map's or the attribute's.
         if let Some(cors) = script.cors {
@@ -4005,8 +4009,9 @@ impl dom_api::LoadSink for RendererLoadSink {
         request_origin: Option<&str>,
         origin: &dom_api::FetchOrigin,
     ) -> Option<u64> {
+        let request_origin = request_origin?;
         let mut request = ResourceRequest::new(url, RequestDestination::Style);
-        request.initiator = request_origin.map(String::from);
+        request.initiator = Some(request_origin.to_owned());
         // By CORS, which an origin that allows it makes origin-clean (and
         // one that doesn't, a network error).
         if let Some(cors) = cors {

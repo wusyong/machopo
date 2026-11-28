@@ -53,6 +53,11 @@ pub enum BadMessageReason {
     UnknownLoader,
     /// A worker's request through another loader than the worker's.
     WorkerLoaderMismatch,
+    /// A request with no initiator (Chromium's `kNoInitiator`, which its
+    /// network service takes for none of a renderer's factories'): only
+    /// the browser's own have none, and go by no CORS and no opaque
+    /// response blocking, as a renderer's would without one.
+    NoInitiator,
     /// A request whose initiator is another origin than its loader's
     /// (Chromium's `INCORRECT_LOCK`, `request_initiator_origin_lock`'s
     /// check).

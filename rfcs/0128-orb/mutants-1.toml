@@ -1,0 +1,127 @@
+# Stage 1's mutants (the initiator and CORP): `python3 scripts/test.py mutate rfcs/0128-orb/mutants-1.toml`.
+test = ["sh", "-c", "cargo test -q -p browser --lib render_process_host && cargo test -q -p net --lib corp"]
+timeout = 1200
+
+[[mutant]]
+name = "a request with no initiator is taken"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        None => return Err(BadMessageReason::NoInitiator),'''
+to = '''        None => {}'''
+
+[[mutant]]
+name = "a null initiator through a page's loader keeps its cookies"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        Some("null") => opaque = true,'''
+to = '''        Some("null") => {}'''
+
+[[mutant]]
+name = "an opaque worker's requests keep its creator's cookies"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        opaque = known.opaque;'''
+to = '''        let _ = known.opaque;'''
+
+[[mutant]]
+name = "an opaque context's params keep the site for cookies"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        site_for_cookies: None,
+        frame_site: None,
+        initiator: Some("null".to_owned()),
+        ..trusted.clone()'''
+to = '''        frame_site: None,
+        initiator: Some("null".to_owned()),
+        ..trusted.clone()'''
+
+[[mutant]]
+name = "an opaque context's params lose the top-level site"
+file = "crates/browser/src/render_process_host.rs"
+from = '''        initiator: Some("null".to_owned()),
+        ..trusted.clone()'''
+to = '''        initiator: Some("null".to_owned()),
+        top_frame_site: None,
+        ..trusted.clone()'''
+
+[[mutant]]
+name = "a data: URL's worker isn't opaque"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                        let opaque = request
+                            .url
+                            .get(..5)
+                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+                            || request.initiator.as_deref() == Some("null");'''
+to = '''                        let opaque = request.initiator.as_deref() == Some("null");'''
+test = ["sh", "-c", "cargo test -q -p browser --test it -- cookies::a_data_url"]
+
+[[mutant]]
+name = "the renderer sends a request from no document"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let request_origin = request_origin?;
+        let mut request = ResourceRequest::new(url, RequestDestination::Image);
+        request.initiator = Some(request_origin.to_owned());'''
+to = '''        let mut request = ResourceRequest::new(url, RequestDestination::Image);
+        request.initiator = request_origin.map(str::to_owned);'''
+test = ["sh", "-c", "cargo test -q -p shell --test it && cargo test -q -p browser --test it"]
+
+[[mutant]]
+name = "no CORP is checked"
+file = "crates/net/src/url_loader.rs"
+from = '''        if request.mode == protocol::network::RequestMode::NoCors
+            && let Some(initiator) = request.initiator.as_deref()'''
+to = '''        if false
+            && let Some(initiator) = request.initiator.as_deref()'''
+test = ["sh", "-c", "python3 scripts/test.py wpt fetch/cross-origin-resource-policy/ 2>&1 | grep -q 'Got 0 unexpected'"]
+
+[[mutant]]
+name = "CORP is checked for CORS requests too"
+file = "crates/net/src/url_loader.rs"
+from = '''        if request.mode == protocol::network::RequestMode::NoCors
+            && let Some(initiator) = request.initiator.as_deref()'''
+to = '''        if let Some(initiator) = request.initiator.as_deref()'''
+test = ["sh", "-c", "python3 scripts/test.py wpt fetch/cross-origin-resource-policy/ 2>&1 | grep -q 'Got 0 unexpected'"]
+
+[[mutant]]
+name = "CORP's same-origin allows anyone"
+file = "crates/net/src/corp.rs"
+from = '''        Some(Policy::SameOrigin) => true,'''
+to = '''        Some(Policy::SameOrigin) => false,'''
+
+[[mutant]]
+name = "CORP allows its own origin no more"
+file = "crates/net/src/corp.rs"
+from = '''        Some(_) if initiator == url.origin() => false,'''
+to = ''''''
+
+[[mutant]]
+name = "CORP's same-site ignores the scheme"
+file = "crates/net/src/corp.rs"
+from = '''            !(schemelessly_same_site(&initiator, url)
+                && (initiator_secure || !secure(url.scheme())))'''
+to = '''            let _ = initiator_secure;
+            !schemelessly_same_site(&initiator, url)'''
+
+[[mutant]]
+name = "CORP's same-site takes IP addresses"
+file = "crates/net/src/corp.rs"
+from = '''    let (Host::Domain(initiator_name), Some(Host::Domain(name))) = (initiator_host, url.host())
+    else {
+        return false;
+    };'''
+to = '''    let (Host::Domain(initiator_name), Some(Host::Domain(name))) = (initiator_host, url.host())
+    else {
+        return initiator_host.to_string() == url.host_str().unwrap_or_default();
+    };'''
+
+[[mutant]]
+name = "CORP's values are taken whatever their case"
+file = "crates/net/src/corp.rs"
+from = '''    match value {
+        "same-origin" => Some(Policy::SameOrigin),'''
+to = '''    match value.to_ascii_lowercase().as_str() {
+        "same-origin" => Some(Policy::SameOrigin),'''
+
+[[mutant]]
+name = "two CORP headers are the first"
+file = "crates/net/src/corp.rs"
+from = '''    if values.next().is_some() {
+        return None;
+    }'''
+to = ''''''

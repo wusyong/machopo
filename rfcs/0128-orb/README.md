@@ -1,7 +1,8 @@
 # RFC 0128：跨源的回應不交給不該拿的 renderer（ORB 和 CORP）
 
 - 開始日期：2026-11-28
-- 狀態：👍 已接受：2026-11-28
+- 狀態：🚧 已排程：2026-11-28
+- 進度和驗收：`progress.md`
 - 細節：`details.md`
 
 RFC 0122 路線圖的 N（M1 的第二份）。
@@ -62,9 +63,9 @@ RFC 0122 路線圖的 N（M1 的第二份）。
 ### 發起者（已決定的事項第 3 條）
 
 - **不帶的是壞訊息**：Browser 的 `check_request` 收到 renderer 的子資源請求 `initiator` 是 `None` 的，是壞訊息（新的 `BadMessageReason`，或擴大 `InitiatorMismatch`）。renderer 在文件不在時（`load_origin` 找不到 document）現在送 `None`，改成不送那個請求。
-- **CORS 照 `mode`**：`net` 的 `Cors::new` 不再用「有沒有 `initiator`」決定要不要走 CORS，改成照 `mode`，和 Fetch 的「main fetch」一樣。`initiator` 是 `None` 的只剩 Browser 自己的請求（導覽），那些不走 CORS，也不走 ORB（Chromium 的 `IsOpaqueResponse`：「Browser-initiated requests are never opaque」）。
+- **CORS 照 `mode`**：renderer 的請求一定帶發起者，到了 `net` 就一律照 `mode` 走 CORS（`no-cors` 的回應是 opaque 的）。`net` 的 `Cors::new` 照舊在沒有 `initiator` 時不走 CORS：只剩 Browser 自己的請求（導覽）沒有，它們不該走 CORS（導覽的回應不是 opaque 的），也不走 ORB（Chromium 的 `IsOpaqueResponse`：「Browser-initiated requests are never opaque」）。草稿原本寫「`Cors::new` 改成照 `mode`」，實作時發現它照「有沒有發起者」分的正是「renderer 的、Browser 自己的」，擋在 Browser 這一側（壞訊息）就夠了，`net` 不用改。
 - **opaque 的 worker 有自己的參數**：`data:` 網址的 worker（和它開的 worker）的 origin 是 opaque 的，現在用的是建它的文件的 loader，所以照那個文件的可信參數帶 cookie，Chrome 不帶（`details.md` 的「opaque 的 context 和 cookie」）。改成照 Chromium 的結構：每個 dedicated worker 有自己的參數（Chromium 的 `CreateNetworkFactoryForSubresources`），origin 是 opaque 的拿 opaque 的可信參數，site for cookies 是空的（Chromium 的 `UpdateIsolationInfoAndStorageAccessForOpaqueOrigin`），最上層的網站照舊（HTTP cache 的分區不變）。Browser 在 `DedicatedWorkerCreated` 時知道它的主 script 的網址和建它的是誰，就知道它是不是 opaque 的；worker 的請求本來就帶 worker 的編號，IO thread 照編號換上它的參數，protocol 不用多一則訊息。
-- **文件的 loader 收到 `"null"`**：照收（Chromium 的 `VerifyRequestInitiatorLock`：「Opaque |initiator| is always allowed」，factory 被 opaque 的 frame 沿用時會這樣），但當成 opaque 的 context 發的：可信參數的 site for cookies 換成空的，不帶 cookie。這樣被攻破的 renderer 拿文件的 loader、寫 `"null"`、對信任 `Origin: null` 的伺服器發帶 credentials 的 CORS 請求，拿到的和任何網頁用 `data:` worker 拿到的一樣（沒有 cookie）。`docs/limitations.md` 的「網路」裡「請求的 `initiator` 是 opaque 的（`null`）時照收」那一條跟著改寫。
+- **文件的 loader 收到 `"null"`**：照收（Chromium 的 `VerifyRequestInitiatorLock`：「Opaque |initiator| is always allowed」，factory 被 opaque 的 frame 沿用時會這樣），但當成 opaque 的 context 發的：可信參數的 site for cookies 換成空的，不帶 cookie。這樣被攻破的 renderer 拿文件的 loader、寫 `"null"`、對信任 `Origin: null` 的伺服器發帶 credentials 的 CORS 請求，拿到的和任何網頁用 `data:` worker 拿到的一樣（沒有 cookie）。`docs/limitations.md` 的「網路」裡「請求的 `initiator` 是 opaque 的（`null`）時照收，不像 Chromium 核對它的 precursor」那一句拿掉：Chromium 也不核對（「opaque 的 context 和 cookie」），machopo 又多了不帶 cookie。
 
 ### ORB
 

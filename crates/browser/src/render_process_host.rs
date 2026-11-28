@@ -240,19 +240,41 @@ pub(crate) struct Loaders {
 }
 
 /// What the IO thread knows of a dedicated worker of the renderer's: the
-/// loader it was made with, its creator's.
+/// loader it was made with, its creator's; whether it is of an opaque
+/// origin (a `data:` URL's, or one an opaque one made), whose requests
+/// go as an opaque context's (`opaque_context`), not its creator's
+/// (Chromium gives each dedicated worker a factory of its own, of no site
+/// for cookies when its origin is opaque).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Worker {
     loader: u64,
+    opaque: bool,
+}
+
+/// `trusted`, a loader's, for a request of an opaque context through it
+/// (a `data:` URL's worker; an initiator of `null` through a loader of a
+/// tuple origin): no site for cookies, so no cookies, as a cross-site
+/// context's (Chromium's `UpdateIsolationInfoAndStorageAccessForOpaqueOrigin`
+/// for an opaque worker); its frame site opaque; the top-level site kept,
+/// which its HTTP cache entries stay under.
+fn opaque_context(trusted: &TrustedParams) -> TrustedParams {
+    TrustedParams {
+        site_for_cookies: None,
+        frame_site: None,
+        initiator: Some("null".to_owned()),
+        ..trusted.clone()
+    }
 }
 
 /// A request's trusted params, its loader's, if the renderer may send it
 /// through `loader` (worker `worker`'s, if a worker's): of a loader it
-/// was given, the worker's for a worker's, its initiator none, opaque (an
-/// opaque origin of the loader's, as Chromium lets its precursor) or the
-/// loader's origin, with no trusted params of its own. `Ok(None)`: a
-/// worker the renderer has no more (gone as the request came), refused
-/// without blame.
+/// was given, the worker's for a worker's, its initiator the loader's
+/// origin or opaque, with no trusted params of its own. An opaque one
+/// through a loader of a tuple origin (Chromium's `VerifyRequestInitiatorLock`:
+/// "Opaque |initiator| is always allowed"), and an opaque worker's, go as
+/// an opaque context's (`opaque_context`): a page's loader can't lend an
+/// opaque initiator its cookies. `Ok(None)`: a worker the renderer has no
+/// more (gone as the request came), refused without blame.
 fn check_request(
     loaders: &Loaders,
     workers: &HashMap<u64, Worker>,
@@ -267,6 +289,7 @@ fn check_request(
         .params
         .get(&loader)
         .ok_or(BadMessageReason::UnknownLoader)?;
+    let mut opaque = false;
     if let Some(worker) = worker {
         let Some(known) = workers.get(&worker) else {
             return Ok(None);
@@ -274,17 +297,23 @@ fn check_request(
         if known.loader != loader {
             return Err(BadMessageReason::WorkerLoaderMismatch);
         }
+        opaque = known.opaque;
     }
     let lock = match &params.origin {
         origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),
         url::Origin::Opaque(_) => "null".to_owned(),
     };
     match request.initiator.as_deref() {
-        None | Some("null") => {}
+        None => return Err(BadMessageReason::NoInitiator),
+        Some("null") => opaque = true,
         Some(initiator) if initiator == lock => {}
         Some(_) => return Err(BadMessageReason::InitiatorMismatch),
     }
-    Ok(Some(params.trusted.clone()))
+    Ok(Some(if opaque && params.origin.is_tuple() {
+        opaque_context(&params.trusted)
+    } else {
+        params.trusted.clone()
+    }))
 }
 
 /// Where script's cookies of `url` (a document's cookie URL) are, through
@@ -1350,8 +1379,16 @@ impl IoThreadHost {
                 );
                 match checked {
                     Ok(trusted) => {
+                        // A `data:` URL's worker is of an opaque origin
+                        // (HTML's "set up a worker environment settings
+                        // object"), and so is one an opaque one made.
+                        let opaque = request
+                            .url
+                            .get(..5)
+                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+                            || request.initiator.as_deref() == Some("null");
                         request.trusted = trusted;
-                        self.workers.insert(worker, Worker { loader });
+                        self.workers.insert(worker, Worker { loader, opaque });
                         self.fetch(LoadKey::WorkerScript(worker), request);
                     }
                     Err(reason) => (self.forward)(Err(reason)),
@@ -1649,9 +1686,10 @@ mod tests {
     }
 
     /// A request through a loader the renderer was given takes the
-    /// loader's trusted params: its initiator none, opaque or the loader's
-    /// origin; another origin, a loader it wasn't given, or trusted params
-    /// of its own are bad.
+    /// loader's trusted params, its initiator the loader's origin; an
+    /// opaque one's, as an opaque context's: no site for cookies, the
+    /// top-level site kept. None, another origin, a loader it wasn't
+    /// given, or trusted params of its own are bad.
     #[test]
     fn a_request_takes_its_loaders_params() {
         let (loaders, workers) = (loaders(), HashMap::new());
@@ -1659,9 +1697,16 @@ mod tests {
             check_request(&loaders, &workers, None, loader, request)
         };
         let trusted = loaders.params[&1].trusted.clone();
-        for initiator in [None, Some("null"), Some("https://a.example")] {
-            assert_eq!(check(1, &request(initiator)), Ok(Some(trusted.clone())));
-        }
+        assert_eq!(
+            check(1, &request(Some("https://a.example"))),
+            Ok(Some(trusted.clone()))
+        );
+        let opaque = check(1, &request(Some("null"))).unwrap().unwrap();
+        assert_eq!(opaque.site_for_cookies, None);
+        assert_eq!(opaque.top_frame_site, trusted.top_frame_site);
+        assert_eq!(opaque.frame_site, None);
+        assert_eq!(opaque.initiator.as_deref(), Some("null"));
+        assert_eq!(check(1, &request(None)), Err(BadMessageReason::NoInitiator));
         assert_eq!(
             check(1, &request(Some("https://b.example"))),
             Err(BadMessageReason::InitiatorMismatch)
@@ -1697,15 +1742,35 @@ mod tests {
 
     /// A worker's request goes through the loader the worker was made
     /// with; through another it is bad; of a worker the renderer has no
-    /// more, refused without blame.
+    /// more, refused without blame. An opaque worker's (a `data:` URL's)
+    /// go as an opaque context's, whatever their initiator.
     #[test]
     fn a_workers_request_goes_through_its_loader() {
         let loaders = loaders();
-        let workers = HashMap::from([(7, Worker { loader: 1 })]);
+        let workers = HashMap::from([
+            (
+                7,
+                Worker {
+                    loader: 1,
+                    opaque: false,
+                },
+            ),
+            (
+                9,
+                Worker {
+                    loader: 1,
+                    opaque: true,
+                },
+            ),
+        ]);
         let ok = request(Some("https://a.example"));
         assert_eq!(
             check_request(&loaders, &workers, Some(7), 1, &ok),
             Ok(Some(loaders.params[&1].trusted.clone()))
+        );
+        assert_eq!(
+            check_request(&loaders, &workers, Some(9), 1, &ok),
+            Ok(Some(opaque_context(&loaders.params[&1].trusted)))
         );
         assert_eq!(
             check_request(&loaders, &workers, Some(7), 2, &ok),
@@ -1824,7 +1889,8 @@ mod tests {
             Some(BadMessageReason::UnknownLoader)
         );
 
-        let document = ResourceRequest::new("https://a.example/", RequestDestination::Document);
+        let mut document = ResourceRequest::new("https://a.example/", RequestDestination::Document);
+        document.initiator = Some("https://a.example".to_owned());
         host.on_message(RendererHostMsg::FetchResource {
             request_id: 2,
             worker: None,
@@ -1857,7 +1923,8 @@ mod tests {
     #[test]
     fn the_io_thread_hosts_blob_urls() {
         let (mut host, forwarded, _renderer) = io_thread_host();
-        let script = ResourceRequest::new("data:text/javascript,1", RequestDestination::Worker);
+        let mut script = ResourceRequest::new("data:text/javascript,1", RequestDestination::Worker);
+        script.initiator = Some("https://a.example".to_owned());
         host.on_message(RendererHostMsg::DedicatedWorkerCreated {
             worker: 1,
             loader: 1,
@@ -2027,7 +2094,8 @@ mod tests {
             ),
             Some(BadMessageReason::UnknownLoader)
         );
-        let script = ResourceRequest::new("data:text/javascript,1", RequestDestination::Worker);
+        let mut script = ResourceRequest::new("data:text/javascript,1", RequestDestination::Worker);
+        script.initiator = Some("https://a.example".to_owned());
         host.on_message(RendererHostMsg::DedicatedWorkerCreated {
             worker: 1,
             loader: 1,

@@ -883,6 +883,12 @@ html/user-activation/propagation-sameorigin.html
 html/user-activation/user-activation-interface.html
 fetch/api/cors/
 
+# Cross-Origin-Resource-Policy, which the network service checks for a
+# no-cors request at each hop. machopo has no SharedWorker and no service
+# worker (those variants error), and `<img crossorigin>` loads by no-cors
+# (its CORS image loads are blocked as no-cors ones).
+fetch/cross-origin-resource-policy/
+
 # `Location` and `hashchange`. The whole directory of `Location`, but for
 # what is `disabled`; `javascript:` URLs.
 html/browsers/history/the-location-interface/

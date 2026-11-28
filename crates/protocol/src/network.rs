@@ -90,9 +90,9 @@ pub struct ResourceRequest {
     pub headers: Vec<(String, String)>,
     /// The origin of the document that asked (Chromium's
     /// `request_initiator`), serialized (`null` for an opaque one); `None`
-    /// for one the browser makes itself, or a subresource that doesn't go
-    /// by CORS. A request with one (`fetch()`'s, a module script's, one
-    /// with `crossorigin`) goes by its `mode` and `credentials`.
+    /// for one the browser makes itself (a navigation), which goes by no
+    /// CORS. A renderer's has one, or is a bad message, and goes by its
+    /// `mode` and `credentials`.
     pub initiator: Option<String>,
     pub mode: RequestMode,
     pub credentials: CredentialsMode,
@@ -549,6 +549,9 @@ pub enum NetErrorCode {
     ContentDecodingFailed,
     /// A load that may only use the HTTP cache had nothing there to use.
     CacheMiss,
+    /// The response said it isn't for whoever asked
+    /// (`Cross-Origin-Resource-Policy`).
+    BlockedByResponse,
 }
 
 impl NetErrorCode {
@@ -572,6 +575,7 @@ impl NetErrorCode {
             Self::SslProtocolError => "ERR_SSL_PROTOCOL_ERROR",
             Self::CertAuthorityInvalid => "ERR_CERT_AUTHORITY_INVALID",
             Self::CertDateInvalid => "ERR_CERT_DATE_INVALID",
+            Self::BlockedByResponse => "ERR_BLOCKED_BY_RESPONSE",
             Self::CertCommonNameInvalid => "ERR_CERT_COMMON_NAME_INVALID",
             Self::CertInvalid => "ERR_CERT_INVALID",
             Self::ContentDecodingFailed => "ERR_CONTENT_DECODING_FAILED",

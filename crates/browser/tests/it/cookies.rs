@@ -358,3 +358,96 @@ fn a_new_tabs_about_blank_is_of_the_page_that_opened_it() {
     tab.shutdown();
     opener.shutdown();
 }
+
+/// A `data:` URL's worker is of an opaque origin, a cross-site context
+/// (HTML's "has cross-site ancestor"): its credentialed requests send no
+/// cookies, and `Origin: null`, as Chrome's do, though it goes through
+/// the loader of the page that made it. The page's own send them.
+#[test]
+fn a_data_url_workers_requests_send_no_cookies() {
+    let server = server(&[
+        (
+            "/page",
+            Route::ok(
+                "text/html",
+                r#"<!DOCTYPE html><script>
+const target = `${location.origin}/`;
+fetch(target + 'from-page', {credentials: 'include'}).then(() => {
+  const source = `fetch('${target}from-worker', {credentials: 'include', mode: 'cors'})
+    .then(r => postMessage('worker ' + r.status), e => postMessage('worker ' + e));`;
+  const worker = new Worker('data:text/javascript,' + encodeURIComponent(source));
+  worker.onmessage = e => { document.title = e.data; };
+});
+</script>"#,
+            )
+            .with_header("Set-Cookie", "lax=1; SameSite=Lax")
+            .with_header("Set-Cookie", "plain=1"),
+        ),
+        ("/from-page", Route::ok("text/plain", "page")),
+        (
+            "/from-worker",
+            Route::ok("text/plain", "worker")
+                .with_header("Access-Control-Allow-Origin", "null")
+                .with_header("Access-Control-Allow-Credentials", "true"),
+        ),
+    ]);
+    let (mut web_contents, host_rx) = tab_in(partition());
+    web_contents.navigate(server.url_for_host("a.localhost", "/page"));
+    let title = titles_until(&mut web_contents, &host_rx, |title| {
+        title.starts_with("worker")
+    });
+    assert_eq!(title, "worker 200");
+    assert_eq!(
+        sent(&server, "/from-page").as_deref(),
+        Some("lax=1; plain=1")
+    );
+    let from_worker = server
+        .requests()
+        .into_iter()
+        .rfind(|request| request.target == "/from-worker")
+        .expect("the worker's request");
+    assert_eq!(from_worker.header("origin"), Some("null"));
+    assert_eq!(from_worker.header("cookie"), None);
+    web_contents.shutdown();
+}
+
+/// A `data:` URL's module worker's static imports are fetched from the
+/// page's origin (HTML's "outside settings"), but as the worker's, an
+/// opaque context's: no cookies, as Chromium's worker factory of no site
+/// for cookies has it.
+#[test]
+fn a_data_url_module_workers_imports_send_no_cookies() {
+    let server = server(&[
+        (
+            "/page",
+            Route::ok(
+                "text/html",
+                r#"<!DOCTYPE html><script>
+const source = `import '${location.origin}/module.js'; postMessage('imported');`;
+const worker = new Worker('data:text/javascript,' + encodeURIComponent(source), {type: 'module'});
+worker.onmessage = e => { document.title = e.data; };
+worker.onerror = () => { document.title = 'error'; };
+</script>"#,
+            )
+            .with_header("Set-Cookie", "plain=1"),
+        ),
+        (
+            "/module.js",
+            Route::ok("text/javascript", "export {};")
+                .with_header("Access-Control-Allow-Origin", "*"),
+        ),
+    ]);
+    let (mut web_contents, host_rx) = tab_in(partition());
+    web_contents.navigate(server.url_for_host("a.localhost", "/page"));
+    let title = titles_until(&mut web_contents, &host_rx, |title| {
+        title == "imported" || title == "error"
+    });
+    assert_eq!(title, "imported");
+    let imported = server
+        .requests()
+        .into_iter()
+        .rfind(|request| request.target == "/module.js")
+        .expect("the import's request");
+    assert_eq!(imported.header("cookie"), None);
+    web_contents.shutdown();
+}

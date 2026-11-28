@@ -1,5 +1,6 @@
-//! CORS for a request with an initiator (`fetch()`'s, and a subresource's
-//! that goes by CORS: a module script, `crossorigin`): Chromium's
+//! CORS for a request with an initiator (every renderer's request, by its
+//! `mode`: `fetch()`'s, a subresource's; a `no-cors` one's response is
+//! opaque): Chromium's
 //! `CorsURLLoader`, in the network service, as a renderer isn't trusted
 //! to keep another origin's data from script. Fetch's parts of "main
 //! fetch" (the response tainting, by the request's mode), "HTTP fetch"
@@ -76,9 +77,10 @@ fn is_token(text: &str) -> bool {
 }
 
 impl<'r> Cors<'r> {
-    /// The CORS state of `request`; `None` for one without an initiator
-    /// (the browser's own, a subresource that doesn't go by CORS), which
-    /// CORS doesn't apply to.
+    /// The CORS state of `request`; `None` for one without an initiator:
+    /// the browser's own (a navigation), which CORS doesn't apply to. Every
+    /// renderer's has one (the browser refuses one without as a bad
+    /// message), and goes by its `mode`.
     pub(crate) fn new(request: &'r ResourceRequest) -> Option<Self> {
         Some(Self {
             request,

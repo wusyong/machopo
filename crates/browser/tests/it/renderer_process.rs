@@ -74,6 +74,22 @@ fn child() {
                 let _ = link.send(to_browser::HOST, &msg);
             })
         }
+        // Once the browser gave its page's document a loader: a request
+        // through it with no initiator, which would go by no CORS.
+        Some("a request with no initiator") => rogue_on_commit(|link, loader, url| {
+            let mut request = protocol::network::ResourceRequest::new(
+                url,
+                protocol::network::RequestDestination::Empty,
+            );
+            request.mode = protocol::network::RequestMode::Cors;
+            let msg = RendererHostMsg::FetchResource {
+                request_id: 1,
+                worker: None,
+                loader,
+                request,
+            };
+            let _ = link.send(to_browser::HOST, &msg);
+        }),
         // What Viz would be handed, as its compositor sends it: one that
         // can't be right, and one that can.
         Some(
@@ -827,10 +843,11 @@ fn a_process_that_sends_what_no_renderer_does_is_killed() {
     }
 }
 
-/// A renderer taken over has its document's loader: a blob URL of another
-/// site through it, which a document of that site would take for its own,
-/// is bad, and so is one another renderer has; each ends it, its URL
-/// registered for no navigation.
+/// A renderer taken over has its document's loader: a request through it
+/// with no initiator (which would go by no CORS, and be no one's to block),
+/// a blob URL of another site through it, which a document of that site
+/// would take for its own, and one another renderer has are bad; each ends
+/// it, a blob URL registered for no navigation.
 #[cfg(unix)]
 #[test]
 fn a_renderer_registers_no_blob_url_but_its_documents_own() {
@@ -838,6 +855,11 @@ fn a_renderer_registers_no_blob_url_but_its_documents_own() {
     let origin = url::Url::parse(&server.url("/")).unwrap().origin();
     let taken = format!("blob:{}/{TAKEN_BLOB_URL}", origin.ascii_serialization());
     for (role, reason, url) in [
+        (
+            "a request with no initiator",
+            browser::BadMessageReason::NoInitiator,
+            String::new(),
+        ),
         (
             "another site's blob URL",
             browser::BadMessageReason::BlobUrlOriginMismatch,
@@ -888,6 +910,7 @@ fn a_renderer_registers_no_blob_url_but_its_documents_own() {
             .load_blob_url(&navigation, None)
             .map(|response| response.body.to_vec());
         match role {
+            "a request with no initiator" => {}
             "another site's blob URL" => assert!(body.is_err(), "{role}: {url}"),
             _ => assert_eq!(
                 body.ok().as_deref(),
