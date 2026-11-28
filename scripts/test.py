@@ -1431,8 +1431,9 @@ def cmd_wdspec(args: argparse.Namespace) -> int:
 MUTATE_DIR = ROOT / "target" / "mutate"
 MUTATE_ORIGINALS = MUTATE_DIR / "originals"
 # Where the originals of files outside the repo wait (a spec may break one
-# of `../third_party/elise` or `../third_party/sunaba`, machopo's own
-# projects next to it): by their path from the repo's parent, under
+# of `../third_party/elise`, or of a checkout of sunaba there that Cargo is
+# patched to: machopo's own projects next to it): by their path from the
+# repo's parent, under
 # `originals/` like the rest, so that `--restore` and the check for a run
 # that didn't finish find them.
 MUTATE_OUTSIDE = "_outside"
@@ -1831,7 +1832,7 @@ def cmd_mutate(args: argparse.Namespace) -> int:
 
     The files are broken while it runs: don't stage or commit meanwhile.
     Their originals wait in `target/mutate/originals/` until put back (a
-    file outside the repo, as `../third_party/sunaba/src/linux.rs`, in its
+    file outside the repo, as `../third_party/elise/crates/elise/src/heap.rs`, in its
     `_outside/`, by its path from the repo's parent); a
     run that was killed leaves them there, and the next refuses to start
     until `--restore` puts them back. Exits non-zero if a mutant was missed,

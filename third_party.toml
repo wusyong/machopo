@@ -1,7 +1,8 @@
 # The commits of the projects machopo builds and tests against, checked out next
-# to the repo in `../third_party/<name>`: our forks, elise and sunaba (Cargo.toml
+# to the repo in `../third_party/<name>`: our forks and elise (Cargo.toml
 # depends on them by path), and upstream WPT, Speedometer and Blink's perf
-# tests (read in place, never changed).
+# tests (read in place, never changed). sunaba, machopo's own too, isn't
+# here: it is a crates.io release, which Cargo.lock pins.
 # `python scripts/ci.py third-party` clones them there at these commits, or
 # checks that the existing checkouts match; a project with `archive` is the
 # folder of that path in the repository at `rev`, downloaded rather than
@@ -18,12 +19,6 @@
 # its CI has tested (it runs on every push).
 repository = "https://github.com/wusyong/elise"
 rev = "3351108d3e1c9879e87a5c41153f02a80b731685"
-
-[sunaba]
-# The process's sandbox: machopo's own project, not a fork. Its `main` branch,
-# a commit its CI has tested on Linux, macOS and Windows (it runs on every push).
-repository = "https://github.com/wusyong/sunaba"
-rev = "7973001dd0a82991d30f4b1c5f54427e61a85494"
 
 [wasmtime]
 # wasm scripts' engine, with elise as a collector (`gc-elise`). The `machopo`

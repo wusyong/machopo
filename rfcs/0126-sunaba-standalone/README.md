@@ -7,7 +7,7 @@
 
 ## 摘要
 
-process 的 sandbox `sunaba`（原本的 `crates/sunaba`）搬出 machopo，像 elise 一樣成為自己的 repo（`github.com/wusyong/sunaba`）：從一個新的 commit 開始（每一行的理由留在 machopo 的歷史裡），有自己的 lint、toolchain、英文的文件（soundness、contributing、testing）、`sanity.py` 和 CI（Linux、macOS、Windows 都跑）；machopo 用 path 依賴旁邊的 ../third_party/sunaba，在 `third_party.toml` 釘住它 `main` 上 CI 測過的 commit。`ipc` 照舊依賴它，`ipc` 要不要、怎麼分出去不在這份裡。第一次在三個平台上跑的 CI 找到兩件事（Linux 的 chroot 的測試看 kernel 的 errno、Windows 的 default DACL 帶著 logon session），在搬的過程中處理了。選了哪些做法見「已決定的事項」。
+process 的 sandbox `sunaba`（原本的 `crates/sunaba`）搬出 machopo，像 elise 一樣成為自己的 repo（`github.com/wusyong/sunaba`）：從一個新的 commit 開始（每一行的理由留在 machopo 的歷史裡），有自己的 lint、toolchain、英文的文件（soundness、contributing、testing）、`sanity.py` 和 CI（Linux、macOS、Windows 都跑）；machopo 原本用 path 依賴旁邊的 ../third_party/sunaba、在 `third_party.toml` 釘住它 `main` 上 CI 測過的 commit；做完之後 sunaba 發布到 crates.io（0.1.0），machopo 改用它的 release，`Cargo.lock` 釘住（已決定的事項第 13、14 條）。`ipc` 照舊依賴它，`ipc` 要不要、怎麼分出去不在這份裡。第一次在三個平台上跑的 CI 找到兩件事（Linux 的 chroot 的測試看 kernel 的 errno、Windows 的 default DACL 帶著 logon session），在搬的過程中處理了。選了哪些做法見「已決定的事項」。
 
 ## 動機
 
@@ -126,13 +126,13 @@ process 的 sandbox `sunaba`（原本的 `crates/sunaba`）搬出 machopo，像 
 
 2026-11-27，使用者照草稿的看法確認：
 
-1. **照 elise 接回 machopo（P1）**：`sunaba` 是自己的 repo，machopo 用 path 依賴 ../third_party/sunaba，`third_party.toml` 釘它 `main` 上 CI 測過的 commit，`ci.py third-party` 照 elise 的那一條路 clone 和切換。理由：和 elise、fork 同一套流程和工具，本機改了馬上能在 machopo 裡試。不選 Cargo 的 git 依賴（P2：本機的改動要先 push 或另寫 `[patch]` 才試得到，和其他第三方的專案不一樣）、crates.io（P3：要版本號和 API 的承諾，API 還跟著 machopo 變）、不搬只補 CI（P4：不是要的獨立，machopo 的 CI 要為一個 crate 開兩個平台的 job）。
+1. ~~**照 elise 接回 machopo（P1）**~~（2026-11-28 改成 P3，第 14 條）：`sunaba` 是自己的 repo，machopo 用 path 依賴 ../third_party/sunaba，`third_party.toml` 釘它 `main` 上 CI 測過的 commit，`ci.py third-party` 照 elise 的那一條路 clone 和切換。理由：和 elise、fork 同一套流程和工具，本機改了馬上能在 machopo 裡試。不選 Cargo 的 git 依賴（P2：本機的改動要先 push 或另寫 `[patch]` 才試得到，和其他第三方的專案不一樣）、crates.io（P3：要版本號和 API 的承諾，API 還跟著 machopo 變）、不搬只補 CI（P4：不是要的獨立，machopo 的 CI 要為一個 crate 開兩個平台的 job）。
 2. ~~**保留歷史（H1）**~~（2026-11-28 改成 H2，第 9 條）：用 `git filter-repo --subdirectory-filter crates/sunaba` 帶出它在 machopo 裡的 commit。理由：`git blame` 看得到每一行的理由。不選從新的 commit 開始（H2：理由只留在 machopo 的歷史裡）。
 3. **文件全部英文（L1）**：README、soundness 和新的 contributing、testing 都是英文。理由：README 和 `soundness.md` 本來就是英文的，要給 machopo 以外的人讀。不選照 elise 的中文 docs/（L2）。
 4. **CI 在三個平台上跑（C1）**：`sunaba` 的 CI 在 `ubuntu-latest`、`macos-latest`、`windows-latest` 上跑 `cargo test`、clippy（`-D warnings`）、`cargo fmt --check` 和它的 `sanity.py`，每次 push 都跑；machopo 的 CI 照舊只在 `ubuntu-24.04` 上。理由：macOS 和 Windows 的程式第一次有 CI，machopo 不用為它開新的平台。不選讓 machopo 的 CI 也跑它的測試（C2：重複）。
 
 5. **延後載入失敗的 hook 是預設開著的 feature（D2）**（2026-11-27，第 1 段開始前，使用者確認）：`__pfnDliFailureHook2` 和它呼叫的 `delay_load_failed` 只在 `delay-load-hook` 這個 feature 開著時定義，`default = ["delay-load-hook"]`。理由：一個程式只能有一個這個變數，library 自己定義時，已經有自己的 hook 的程式連結不起來；預設開著，machopo、`ipc` 和 `sunaba` 自己的測試都不用改。不選照舊、只在 README 寫明（D1：那種程式用不了 `sunaba`）；不選照 Chromium 由執行檔自己定義（D3：`chrome.exe` 的 hook 在 `chrome/app`，但 machopo 的 `shell` 就要寫 `#[unsafe(no_mangle)]`，違反 `unsafe` 只在 `bindings`、`ipc` 和 `sunaba`）。
-6. **版本從 0.1.0 開始**（2026-11-27，同上）：從 workspace 繼承的 0.0.1 是 machopo 的佔位；`publish` 照舊是 `false`（不發布到 crates.io，第 1 條）。
+6. **版本從 0.1.0 開始**（2026-11-27，同上）：從 workspace 繼承的 0.0.1 是 machopo 的佔位；~~`publish` 照舊是 `false`（不發布到 crates.io，第 1 條）~~（2026-11-28 發布，第 13 條）。
 
 2026-11-28，第 2 段開始前，使用者確認：
 
@@ -149,12 +149,17 @@ process 的 sandbox `sunaba`（原本的 `crates/sunaba`）搬出 machopo，像 
 
 12. **`test.py mutate` 把 machopo 以外的檔案的原檔存在 `target/mutate/originals/_outside/` 底下（M1）**：spec 的 `file` 寫 ../third_party/sunaba 底下的路徑、`test` 用 `--manifest-path` 本來就能跑（RFC 0094 弄壞 elise 時這樣做過），但原檔存在 `originals/` 加上 `file` 的位置，`../` 把它帶到 `originals/` 外面：跑到一半中斷時，「上一次沒跑完」的檢查和 `--restore` 都找不到它，`../third_party` 的檔案留著壞的。改成 machopo 以外的檔案存在 `originals/_outside/<相對於 machopo 的上一層的路徑>`，`--restore` 照那個路徑放回去；machopo 裡的檔案照舊。理由：改得少，elise 的也一起修好，改 `sunaba` 的 mutation test 照樣寫在 machopo 的 RFC 裡、可以用 machopo 的測試抓（例如 `renderer_sandbox_windows`）。不選只在文件寫明不要中斷（M2：漏洞還在）、`sunaba` 自己寫一份工具（M3：兩份要一起維護，跨 repo 的測試做不到）。
 
+2026-11-28，這份 RFC 做完之後，使用者決定：
+
+13. **sunaba 發布到 crates.io**：使用者發布了 0.1.0（sunaba 的 521e833：拿掉 `publish = false`，加上 `[package.metadata.docs.rs]` 的 `targets`，讓 docs.rs 編 Linux、macOS 和 Windows 三份文件；每個平台的模組在自己的 `cfg` 後面，不寫的話只有 Linux 的）。發布之前在 Windows 上 `cargo publish --dry-run` 通過；docs.rs 三個平台的模組頁都有。0.x 照 Cargo 的 semver：相容的改動升第三位，不相容的升第二位。之後要處理、這次沒做的：`delay-load-hook` 沒有 `links`，同一個程式裡有兩個不相容的版本時，連結時才以重複的 `__pfnDliFailureHook2` 失敗；每個平台的 `probe` 和 `sunaba_probe` 也一起發布了，算在 API 裡。
+14. **machopo 用 crates.io 的 release（P3），取代第 1 條**：workspace 的 `Cargo.toml` 寫 `sunaba = "0.1"`，`Cargo.lock` 釘住版本和 checksum；`third_party.toml` 拿掉 `[sunaba]`，`ci.py third-party` 不再 clone 它。發布之前要在 machopo 裡試，在 machopo 上一層的 `.cargo/config.toml`（machopo 自己的是 commit 進去的）用 `[patch.crates-io]` 指向旁邊的 checkout（作用到那一層每個 machopo 的 checkout，`Cargo.lock` 跟著變、不 commit）；machopo 只 commit 發布了的版本。理由：和一般的 crate 一樣，別人用的就是 machopo 用的那一版，CI 照 `Cargo.lock` 拿、不用多一個 checkout。代價：sunaba 每改一次，要先發一版 machopo 才用得到，machopo 的 CI 測不到還沒發布的 sunaba。不選 path 加 `version`（machopo 不發布，`version` 只檢查 checkout 的版本號，實際上還是 path 依賴）、照舊（P1）。對照 Chromium：`//sandbox` 在 tree 裡、沒有版本；它的第三方 Rust crate 照確切的版本放進 `third_party/rust/`，和 `Cargo.lock` 釘住確切的版本、checksum 接近。指向 sunaba 的文件的地方（`CLAUDE.md`、`docs/`）改成它的 repo 的網址：`sanity.py docs` 檢查 `../third_party/` 底下的路徑存在，CI 上沒有這個 checkout。`test.py mutate` 的 `_outside/`（第 12 條）照舊給 elise 和 patch 過去的 sunaba 的 checkout 用。
+
 ## 待決定
 
 沒有。
 
 ## 之後的可能
 
-- 發布到 crates.io（API 穩定之後）。
+- `delay-load-hook` 加上 `links`，讓 Cargo 在解析時就擋下同一個程式裡兩個不相容的版本（第 13 條）。
 - sunaba 的 `docs/testing.md` 等著它獨立的：`SIGSYS` 的 handler 用 sanitizer 或靜態檢查。
 - `ipc` 拿掉對 `sunaba` 的依賴（Chromium 的分法：`ipc` 只準備要給 child 的 handle 和環境，由用的一方用 `sunaba` 啟動），之後再決定要不要分出去。

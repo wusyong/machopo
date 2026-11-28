@@ -23,6 +23,7 @@
 | CI 找到的 | Windows：sandbox 裡的 process 建的東西不給 logon session（lockdown 的 default DACL，sunaba 照搬 machopo 的 fc17f43d） | sunaba 的 `the_process_has_a_lockdown_app_containers_token`、`what_its_threads_make_isnt_for_the_logon_session`，在 runner（logon session 在預設的 DACL 上）和使用者的 Windows 機器上 |
 | machopo 改接 | workspace 用 path 依賴 ../third_party/sunaba，`third_party.toml` 釘 7973001；`crates/sunaba` 拿掉；`ipc`、`shell` 的程式不改 | `cargo test --workspace`、fmt、clippy；`shell` 的 `renderer_sandbox_macos::` |
 | machopo 改接 | `ci.py third-party` 從空的 ../third_party clone 得出 sunaba，之後認得本機的 checkout | 把 ../third_party/sunaba 移開再跑 |
+| 發布之後 | machopo 用 crates.io 的 sunaba 0.1.0（`Cargo.lock` 記來源和 checksum，和 crates.io 的一致），`third_party.toml` 沒有 `[sunaba]`；上一層的 `.cargo/config.toml` 的 `[patch.crates-io]` 換成 ../third_party/sunaba 的 checkout，拿掉之後回到 release（已決定的事項第 14 條） | `cargo tree -p shell -i sunaba`；`cargo metadata` 在有和沒有那份設定時的 sunaba 的路徑 |
 | machopo 的檢查 | `sanity.py unsafe` 只允許 `bindings` 和 `ipc`；`docs` 把 sunaba 當成搬走的 crate，RFC 裡當時的路徑不檢查 | `sanity.py` 的七項 |
 | `test.py mutate` | machopo 以外的檔案的原檔放在 `target/mutate/originals/_outside/`，`--restore` 放得回去；更外面的檔案在動手之前拒絕 | `scripts/mutate_test.py`（CI 的 lint job）；`mutants-3.toml` |
 
@@ -49,3 +50,9 @@
 - **`test.py mutate`**：新的測試 `scripts/mutate_test.py`（5 個）。**Mutation test**（`mutants-3.toml`，6 個）：原檔照舊放在 `originals/` 外面、不放在 `_outside/`、spec 的路徑不拿掉 `..`、`_outside/` 的放回 machopo 裡、`--restore` 照存的路徑放回、更外面的不拒絕：都由 `mutate_test.py` 抓到；跑完確認 `scripts/test.py` 還原了。
 - **改接**：`Cargo.lock` 不變（path 依賴不記來源）。`ci.py third-party` 不用改：把 ../third_party/sunaba 移開再跑，它 shallow clone 到 7973001；放回去之後照樣認得本機的 checkout。
 - **跑過的檢查**：`cargo test --workspace`（5071 個通過、1 個 ignored，沒有失敗）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`；`sanity.py` 的七項；`scripts/sanity_numerics_test.py`、`ci_patches_test.py`、`mutate_test.py`。Linux 的 `renderer_sandbox_*` 由 machopo 的 CI 跑；Windows 的由使用者在改接之後的 machopo 上驗過（2026-11-28）。
+
+### 發布之後改用 crates.io 的 release（2026-11-28，Windows 11，10.0.26300，x86-64）
+
+- **發布**：使用者發布 sunaba 0.1.0（sunaba 的 521e833，它的 CI 通過）。發布之前 `cargo publish --dry-run` 在 Windows 上通過（33 個檔案），`cargo doc` 的 Windows 那份沒有警告；Linux 和 macOS 的那兩份這台沒裝 target、沒在本機編，發布之後 docs.rs 的三個平台的模組頁都有。
+- **改接**：`Cargo.lock` 的 sunaba 多了 crates.io 的來源和 checksum（`2577564060ec…`，和 crates.io 上的一致），其他依賴不變。在 machopo 上一層放 `[patch.crates-io] sunaba = { path = "third_party/sunaba" }`：`cargo metadata` 的 sunaba 換成 checkout 的 `Cargo.toml`；拿掉之後回到 release，`Cargo.lock` 和沒有 patch 時一樣。
+- **跑過的檢查**：`cargo test -p ipc`（103、115 個通過，1 個 ignored）、`cargo test -p shell --test it renderer_sandbox_windows`（13 個通過）；`sanity.py` 的 `deps`、`unsafe`、`tests`、`docs`；`ci.py third-party`；`mutate_test.py`。`rfcs/` 以外不再有寫成路徑的 ../third_party/sunaba（CI 上沒有這個 checkout，`sanity.py docs` 會檢查它們存在）；要把 checkout 移開再跑 `sanity.py docs` 時，Windows 說它正被使用，沒有移成。`cargo test --workspace`、fmt、clippy 沒跑（只換了依賴的來源，程式一樣）。

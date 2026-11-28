@@ -22,7 +22,6 @@ machopo builds against projects checked out next to it, in
     elise/          the DOM's GC (machopo's own project)
     parley/         our fork of parley (README.machopo.md)
     rusty_v8/       our fork of rusty_v8, its v8 submodule our fork of V8 (README.machopo.md)
-    sunaba/         the process's sandbox (machopo's own project; the renderer's policy is shell's)
     taffy/          our fork of taffy (README.machopo.md)
     vello/          our fork of vello (README.machopo.md)
     wasmtime/       our fork of wasmtime, with elise as a collector (README.machopo.md)
@@ -43,6 +42,24 @@ taffy's and vello's commits since their upstream (`upstream_rev`) are also
 patches in `patches/<name>/`, exported with `python3 scripts/ci.py
 patches <name>`; `ci.py third-party` checks that they give the pinned
 commit.
+
+sunaba, the process's sandbox (machopo's own project, at
+[github.com/wusyong/sunaba](https://github.com/wusyong/sunaba); the
+renderer's policy is `shell`'s), isn't checked out here: machopo builds
+against its crates.io release, which `Cargo.lock` pins. A change to it is
+tried in machopo before it is released by patching the dependency to a
+checkout of it in `third_party/`, in a `.cargo/config.toml` in
+`<some directory>/` (the repo's own is committed; a path there is from
+`<some directory>/`):
+
+```toml
+[patch.crates-io]
+sunaba = { path = "third_party/sunaba" }
+```
+
+It patches every checkout of machopo in `<some directory>/`, and changes
+`Cargo.lock` while it is there: take it out, and commit the lock only
+with the release it pins (`cargo update -p sunaba`).
 
 V8 isn't built locally: the `v8` crate's build script downloads the V8
 that our rusty_v8 fork's CI built, from the release that
