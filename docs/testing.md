@@ -1,6 +1,6 @@
 # 測試
 
-machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。效能的量測（Speedometer、Blink 的 perf tests、tile 的 raster）在 `benchmarks.md`，目前測試守不住的地方（只靠審查的、只做過手動確認的、沒有計數守著的優化、等價的 mutation……）在 `test-gaps.md`。新的行為都要有測試，並且跑 mutation test（`CLAUDE.md`）。
+machopo 有哪些測試、怎麼跑、怎麼寫才不會時過時不過、CI 的現況、mutation test 的做法。效能的量測（Speedometer、Blink 的 perf tests、tile 的 raster）在 `benchmarks.md`，目前測試守不住的地方（只靠審查的、只做過手動確認的、沒有計數守著的優化、等價的 mutation……）在 `test-gaps.md`。新的行為都要有測試，並且跑 mutation test（`CLAUDE.md`）。
 
 ## 測試的種類
 
@@ -37,6 +37,18 @@ machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。�
 **畫面和網頁平台的行為先找 WPT**：要測的行為 WPT 已經有測試的，把它加進 `tests/wpt/include.txt`（`tests/wpt/README.md` 的做法：先用 `test.py wpt --all` 試跑，大部分通過才整個目錄加，不然只列檔案；用 `MACHOPO_UPDATE_EXPECTATIONS` 寫預期結果，失敗的寫明原因），確認它通過，就不另外寫 machopo 自己的 reftest。只有 WPT 沒有、只部分涵蓋（缺的那一塊沒有測試，或對應的 WPT 失敗、是要人看的 manual test、是 machopo 跑不了的 `.svg` 文件），或測的是 machopo 自己的東西（compositor 的 layer、增量的快取、device pixel 的對齊、規範沒定死而照 Blink 做的行為、canvas 畫進頁面）時，才寫 `tests/reftests/` 的 reftest，在它的 `<title>` 或註解寫明 WPT 缺的是什麼。判斷「有沒有守著」要嚴格：WPT 的測試在 machopo 把這個行為弄壞時會失敗，不只是用到同一個 property；可疑時用 mutation test 確認。
 
 每個指令的選項見 `python3 scripts/sanity.py -h`（`unsafe`、`deps`、`spans`、`boundary`、`tests`、`numerics`、`docs` 這些靜態檢查）、`python3 scripts/ci.py -h`（建置的工具）和 `python3 scripts/test.py -h`（`cargo test` 跳過或不含的 `reftest`、`scenarios`、`wpt`、`wdspec`，以及 `matrix`、`fuzz`、`automation`）。
+
+## 寫測試時避開不穩定
+
+時過時不過的測試，原因多半出在寫法：在開發機上單獨跑都過，到了忙的機器上才壞。**寫的時候就假設機器很忙**：一個 crate 的整合測試是一個 binary，同一個 process 裡平行跑（`shell` 的 `it` 有幾百個測試），CI 只有 4 個 CPU、沒有 GPU（見「CI」），一個測試在等的時候，別的測試正在搶 CPU。單獨跑通過不代表穩定。下面每一條都是 CI 上壞過、改過的寫法：
+
+- **等條件，不等時間**：等一個事件或狀態出現，期限只是保險，要寬（10 到 30 秒，等不到就是壞了）；不寫「X ms 之內會發生」。`shell` 的 `a_client_not_reading_doesnt_hold_machopo_up` 原本要 5 秒內結束，忙的時候花了 5.6 秒；`elements_are_found_after_an_implicit_wait` 原本假設導覽完到第二次查詢不到 200 ms。
+- **要確認「還沒發生」時，用因果擋住，不靠時間差**：延遲要放在觀察的那一步和要擋住的那件事之間，所以先弄清楚回答在哪一步送出、那件事在哪一步發生。`shell` 的 `the_current_url_is_the_documents_shown` 要在導覽還沒 commit 時讀網址，原本延遲回應的 head：`Page.navigate` 在 head 到時才回答，commit 緊接在後，忙的時候下一個命令就晚於 commit；改成延遲 body（commit 要等 body 開始）。`browser` 的 `location_navigates_to_other_documents_through_the_browser` 原本要第一個導覽的請求不到 server，但 browser 收到第二個才放掉第一個，請求可能已經送出。
+- **不數跟著 CPU 走的東西**：profiler 的樣本數、frame 的個數、一段時間裡跑了幾次，看的是拿到多少 CPU。改成比相對的值（兩種間隔的中位數、佔的比例），例如 `shell` 的 `the_profiler_samples_the_pages_script`。
+- **時間不要剛好相等**：headless 的 frame 的時間是 1000/60 ms 的倍數，動畫和 transition 的時間是它的倍數時，兩個事件可能排定在同一個時間，照規範改照 composite order 排，順序就和測試要的不同（`shell` 的 `a_replaced_animation_is_removed`、`a_frames_events_go_by_when`）。用不是 frame 間隔倍數的 `duration`，或加一點 delay 錯開。
+- **共用的資源要隔離**：暫存檔、port、共用記憶體，每個測試自己一份，或整個 process 只準備一次、之後不再改。`shell` 的 `wasm_documents` 的每個測試原本都把 `page.wasm` 重新複製進同一個目錄，另一個測試的頁面正在讀它時拿到被截斷的檔案；`ipc` 的 `a_host_and_a_child_talk` 送下一筆之前沒等上一筆的共用記憶體還回來。
+- **測試裡不做很重的工作**：`shell` 的 `the_window_has_bounds_to_set` 原本截 8192×8192 的圖，好幾個測試一起跑時就逾時。
+- **壞了先懷疑實作**：CI 上時過時不過的測試，有不少查到最後是真的 bug，使用者也碰得到：`shell` 的 `sheets_coming_and_going_are_told`（DevTools 漏送 iframe 的 sheet）、`history_through_the_browser`（`location.hash` 的捲動晚了）、`the_pause_on_exceptions_goes_on_in_the_next_renderer`（session 的狀態在回答之後才送，renderer 結束時就丟了）。所以不放寬期限、不重跑了事（見「工具和跑法」）。
 
 ## CI
 

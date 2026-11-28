@@ -71,6 +71,7 @@
 - **`python3 scripts/test.py reftest`、`scenarios` 和 `wpt` 在本機只跑改到的部分**（`cargo test --workspace` 跳過情境，reftest 和 WPT 不在 `cargo test` 裡；整套由 CI 跑）：改了 style、layout、文字、paint、raster 時，跑相關的 `test.py reftest <路徑>`（machopo 自己的 reftest）和 `test.py wpt <目錄>`（WPT 的 reftest 在它裡面；兩者的篩選見 `-h`）；改了 machopo 自己的 reftest 或它的 expectations 時跑那幾份 `test.py reftest`；寫了或改了情境時，用 `test.py scenarios <名稱>` 跑那幾份；改了 DOM API、WPT 的清單或預期結果時，跑相關的目錄的 `test.py wpt`（預期結果要更新時照樣用 `MACHOPO_UPDATE_EXPECTATIONS` 跑那幾個）。
 - **一份 RFC 做完、merge 回 `main` 之後跑 `cargo clean`**（`docs/README.md` 的「一份 RFC 做完時」）：cargo 不刪舊的輸出，macOS 的 debug build 每次重新 link 都留下舊的 `.o`，`target/debug/deps` 堆大了之後，每個會畫文字的測試 binary 都要多等好幾秒才開始；Windows 上留下的是舊的整套執行檔和 `.pdb`，會吃掉幾百 GB 的磁碟（原因見 `docs/testing.md` 的「工具和跑法」）。RFC 做到一半測試明顯變慢、或磁碟不夠時也可以先跑。它刪掉整個 `target/`（包括 `test.py mutate` 存放的原檔），不要和 cargo 或 `test.py` 同時跑。
 - **會跑很久的指令前面加 `caffeinate -i`**（macOS）：電腦休眠時 monotonic clock 不前進，看起來像卡住。Windows 上先在電源設定裡暫時關掉睡眠。
+- **寫會等、會看先後、會和別的測試搶資源的測試前，先看 `docs/testing.md` 的「寫測試時避開不穩定」**：假設機器很忙，等條件不等時間，「還沒發生」用因果擋住，不靠時間差。
 - 不穩定的測試不要用重跑蓋過去：找出原因，寫進 `progress.md` 的「做過的檢查」。WPT 的查過、一時修不好的，在 `.ini` 標成 known intermittent，附上註解（`docs/testing.md` 的「工具和跑法」）。結果要看 GC 什麼時候標的新測試，交審核前照 CI 的跑法重複跑上千次（同一節）。
 
 ## 程式碼

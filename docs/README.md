@@ -9,7 +9,7 @@
 | `docs/architecture.md` | 目前的架構：process 和 thread、rendering pipeline、各個 crate 和對應的 Chromium 元件、第三方 crate 的選型和理由、刻意和 Chromium 不同的地方 | 設計的來龍去脈（寫在 RFC）、API（寫在 crate 的 README） |
 | `docs/limitations.md` | **目前仍然成立**的已知限制，依領域分組 | 已經解決的、當時發生了什麼 |
 | `docs/render-gaps.md` | raster 用的函式庫（Vello）缺的、做得不一樣的每一項：上游的狀態、machopo 補在哪個函式、哪個測試在上游補上時會失敗、什麼時候可以拿掉；補的註解和「上游還缺」的測試的規則。只放目前仍然成立的 | 使用者看得到的結果以外的限制（`docs/limitations.md`，每項一句、指過來）、當時怎麼查到的（RFC） |
-| `docs/testing.md` | 測試的種類和跑法、CI、快取和增量的交叉檢查、mutation test 的做法、工具和跑法、測試和建置用的環境變數 | 某次工作的測試結果和數字、守不住的地方（`docs/test-gaps.md`）、效能的量測（`docs/benchmarks.md`） |
+| `docs/testing.md` | 測試的種類和跑法、寫測試時避開不穩定、CI、快取和增量的交叉檢查、mutation test 的做法、工具和跑法、測試和建置用的環境變數 | 某次工作的測試結果和數字、守不住的地方（`docs/test-gaps.md`）、效能的量測（`docs/benchmarks.md`） |
 | `docs/test-gaps.md` | **測試守不住的地方**：只靠審查、只做過手動確認、缺少的工具、還沒補的測試空缺、沒有計數守著的優化（各附之後怎麼處理），等價的 mutation。只放目前仍然成立的 | 解決了的、某次工作當時發生了什麼 |
 | `docs/benchmarks.md` | 效能的量測：benchmark 工具（`bench.py`）的用法、雜訊、怎麼讀數字、比較兩個版本 | 某次量到的數字（寫在那份 RFC 的 `progress.md`） |
 | `docs/performance-gaps.md` | 和 Chrome 的效能差在哪：最近一次分析的快照（日期、量法、各類工作多花多少、最熱的函式、對應的 blink_perf 頁）和可以開 RFC 的方向。重量時整份照新的結果改寫；某個方向做完時重量、改寫那一節 | 每次量測的紀錄（寫在 Speedometer 量測工具那份 RFC 的 `progress.md`）、怎麼量（`docs/benchmarks.md`） |
